@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: sd-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: shopping_diary
+    ports:
+      - "5436:5432"
+    volumes:
+      - sd_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shopping_diary"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: sd-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - sd_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  sd_pg_data:
+  sd_redis_data:
