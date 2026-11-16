@@ -11,3 +11,8 @@ spring:
 logging:
   level:
     za.co.shoppingdiary: DEBUG
+
+app:
+  bootstrap:
+    admin-email: admin@shoppingdiary.local
+    admin-password: ChangeMe123!

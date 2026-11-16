@@ -47,3 +47,13 @@ springdoc:
     path: /swagger-ui
   api-docs:
     path: /v3/api-docs
+
+app:
+  jwt:
+    # Base64-encoded HS256 secret. THIS IS A DEV KEY — replace in prod.
+    # Generate one with: openssl rand -base64 32
+    secret: ${JWT_SECRET:c2hvcHBpbmctZGlhcnktZGV2LWp3dC1zZWNyZXQta2V5LXJlcGxhY2UtbWUtaW4tcHJvZA==}
+    expiration-ms: ${JWT_EXPIRATION_MS:86400000}   # 24 hours
+  bootstrap:
+    admin-email: ${BOOTSTRAP_ADMIN_EMAIL:}
+    admin-password: ${BOOTSTRAP_ADMIN_PASSWORD:}
