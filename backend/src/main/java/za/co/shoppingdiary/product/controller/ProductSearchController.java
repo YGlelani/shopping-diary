@@ -44,4 +44,9 @@ public class ProductSearchController {
         }
         return service.pricesForProduct(id, lat, lon, radiusKm);
     }
+
+    @GetMapping("/{id}/history")
+    public List<za.co.shoppingdiary.product.dto.PriceHistoryRow> getPriceHistory(@PathVariable("id") long id) {
+        return service.priceHistory(id);
+    }
 }

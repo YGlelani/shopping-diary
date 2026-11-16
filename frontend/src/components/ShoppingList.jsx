@@ -1,7 +1,11 @@
+import { Trash2, ShoppingBag } from 'lucide-react'; // <-- Import icons
+
 export default function ShoppingList({ cart, onRemove, onOptimize, isOptimizing }) {
   return (
     <div className="bg-white p-4 rounded-lg shadow-sm">
-      <h2 className="font-semibold mb-3">Your List ({cart.length} items)</h2>
+      <h2 className="font-semibold mb-3 flex items-center gap-2">
+        <ShoppingBag size={18} /> Your List ({cart.length} items)
+      </h2>
       {cart.length === 0 ? <p className="text-sm text-gray-500 italic">List is empty.</p> : (
         <ul className="divide-y divide-gray-100 mb-4">
           {cart.map((item) => (
@@ -9,7 +13,9 @@ export default function ShoppingList({ cart, onRemove, onOptimize, isOptimizing 
               <span>{item.productName}</span>
               <div className="flex gap-3 items-center">
                 <span className="text-gray-500">x{item.quantity}</span>
-                <button onClick={() => onRemove(item.id)} className="text-red-500 hover:text-red-700 text-xs font-bold">✕</button>
+                <button onClick={() => onRemove(item.id)} className="text-gray-400 hover:text-red-500 transition">
+                  <Trash2 size={16} />
+                </button>
               </div>
             </li>
           ))}

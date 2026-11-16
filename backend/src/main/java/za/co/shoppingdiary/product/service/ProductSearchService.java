@@ -4,6 +4,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
+
+import za.co.shoppingdiary.product.dto.PriceHistoryRow;
 import za.co.shoppingdiary.product.dto.ProductSearchHit;
 import za.co.shoppingdiary.product.dto.StorePriceRow;
 
@@ -18,35 +20,35 @@ public class ProductSearchService {
 
     public List<ProductSearchHit> search(String query, double lat, double lon, double radiusKm) {
         String sql = """
-            WITH user_point AS (
-                SELECT ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography AS g
-            ),
-            nearby_stores AS (
-                SELECT s.id
-                FROM stores s, user_point up
-                WHERE s.active
-                  AND ST_DWithin(s.location::geography, up.g, :radiusMeters)
-            ),
-            latest_prices AS (
-                SELECT DISTINCT ON (po.product_id, po.store_id)
-                       po.product_id, po.store_id,
-                       po.shelf_price, po.promo_price, po.observed_at
-                FROM price_observations po
-                JOIN nearby_stores ns ON ns.id = po.store_id
-                ORDER BY po.product_id, po.store_id, po.observed_at DESC
-            )
-            SELECT p.id, p.canonical_name, p.brand, p.barcode, p.size_text,
-                   COUNT(DISTINCT lp.store_id) AS store_count,
-                   MIN(COALESCE(lp.promo_price, lp.shelf_price)) AS min_price,
-                   MAX(lp.observed_at) AS latest_observed_at
-            FROM products p
-            JOIN latest_prices lp ON lp.product_id = p.id
-            WHERE p.canonical_name ILIKE '%' || :q || '%'
-            GROUP BY p.id, p.canonical_name, p.brand, p.barcode, p.size_text
-            ORDER BY word_similarity(:q, p.canonical_name) DESC,
-                     min_price ASC NULLS LAST
-            LIMIT 20
-            """;
+                WITH user_point AS (
+                    SELECT ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography AS g
+                ),
+                nearby_stores AS (
+                    SELECT s.id
+                    FROM stores s, user_point up
+                    WHERE s.active
+                      AND ST_DWithin(s.location::geography, up.g, :radiusMeters)
+                ),
+                latest_prices AS (
+                    SELECT DISTINCT ON (po.product_id, po.store_id)
+                           po.product_id, po.store_id,
+                           po.shelf_price, po.promo_price, po.observed_at
+                    FROM price_observations po
+                    JOIN nearby_stores ns ON ns.id = po.store_id
+                    ORDER BY po.product_id, po.store_id, po.observed_at DESC
+                )
+                SELECT p.id, p.canonical_name, p.brand, p.barcode, p.size_text,
+                       COUNT(DISTINCT lp.store_id) AS store_count,
+                       MIN(COALESCE(lp.promo_price, lp.shelf_price)) AS min_price,
+                       MAX(lp.observed_at) AS latest_observed_at
+                FROM products p
+                JOIN latest_prices lp ON lp.product_id = p.id
+                WHERE p.canonical_name ILIKE '%' || :q || '%'
+                GROUP BY p.id, p.canonical_name, p.brand, p.barcode, p.size_text
+                ORDER BY word_similarity(:q, p.canonical_name) DESC,
+                         min_price ASC NULLS LAST
+                LIMIT 20
+                """;
 
         var params = new MapSqlParameterSource()
                 .addValue("q", query)
@@ -71,29 +73,29 @@ public class ProductSearchService {
 
     public List<StorePriceRow> pricesForProduct(long productId, double lat, double lon, double radiusKm) {
         String sql = """
-            WITH user_point AS (
-                SELECT ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography AS g
-            )
-            SELECT s.id AS store_id,
-                   s.name AS store_name,
-                   r.name AS retailer_name,
-                   ST_Distance(s.location::geography, up.g) AS distance_m,
-                   po.shelf_price, po.promo_price, po.member_price, po.unit_price,
-                   po.observed_at, po.verification_status, po.stock_status
-            FROM stores s
-            CROSS JOIN user_point up
-            JOIN retailers r ON r.id = s.retailer_id
-            JOIN LATERAL (
-                SELECT * FROM price_observations
-                WHERE product_id = :productId AND store_id = s.id
-                ORDER BY observed_at DESC
-                LIMIT 1
-            ) po ON true
-            WHERE s.active
-              AND ST_DWithin(s.location::geography, up.g, :radiusMeters)
-            ORDER BY COALESCE(po.promo_price, po.shelf_price) ASC NULLS LAST,
-                     distance_m ASC
-            """;
+                WITH user_point AS (
+                    SELECT ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography AS g
+                )
+                SELECT s.id AS store_id,
+                       s.name AS store_name,
+                       r.name AS retailer_name,
+                       ST_Distance(s.location::geography, up.g) AS distance_m,
+                       po.shelf_price, po.promo_price, po.member_price, po.unit_price,
+                       po.observed_at, po.verification_status, po.stock_status
+                FROM stores s
+                CROSS JOIN user_point up
+                JOIN retailers r ON r.id = s.retailer_id
+                JOIN LATERAL (
+                    SELECT * FROM price_observations
+                    WHERE product_id = :productId AND store_id = s.id
+                    ORDER BY observed_at DESC
+                    LIMIT 1
+                ) po ON true
+                WHERE s.active
+                  AND ST_DWithin(s.location::geography, up.g, :radiusMeters)
+                ORDER BY COALESCE(po.promo_price, po.shelf_price) ASC NULLS LAST,
+                         distance_m ASC
+                """;
 
         var params = new MapSqlParameterSource()
                 .addValue("productId", productId)
@@ -116,6 +118,24 @@ public class ProductSearchService {
             r.setVerificationStatus(rs.getString("verification_status"));
             r.setStockStatus(rs.getString("stock_status"));
             return r;
+        });
+    }
+
+    public List<PriceHistoryRow> priceHistory(long productId) {
+        String sql = """
+                SELECT s.name AS store_name,
+                       COALESCE(po.promo_price, po.shelf_price) AS price,
+                       po.observed_at
+                FROM price_observations po
+                JOIN stores s ON s.id = po.store_id
+                WHERE po.product_id = :productId
+                ORDER BY po.observed_at ASC
+                """;
+        return jdbc.query(sql, new MapSqlParameterSource("productId", productId), (rs, rowNum) -> {
+            return new PriceHistoryRow(
+                    rs.getString("store_name"),
+                    rs.getBigDecimal("price"),
+                    rs.getObject("observed_at", java.time.OffsetDateTime.class).toInstant());
         });
     }
 }
