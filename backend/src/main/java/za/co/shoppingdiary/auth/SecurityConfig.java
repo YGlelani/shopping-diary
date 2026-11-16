@@ -1,6 +1,8 @@
 package za.co.shoppingdiary.auth;
 
 import lombok.RequiredArgsConstructor;
+import za.co.shoppingdiary.auth.filter.JwtAuthenticationFilter;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;

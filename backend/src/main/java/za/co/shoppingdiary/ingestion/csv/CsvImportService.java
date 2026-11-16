@@ -12,12 +12,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-import za.co.shoppingdiary.product.Product;
-import za.co.shoppingdiary.product.ProductRepository;
-import za.co.shoppingdiary.retailer.Retailer;
-import za.co.shoppingdiary.retailer.RetailerRepository;
-import za.co.shoppingdiary.store.Store;
-import za.co.shoppingdiary.store.StoreRepository;
+
+import za.co.shoppingdiary.product.entity.Product;
+import za.co.shoppingdiary.product.repository.ProductRepository;
+import za.co.shoppingdiary.retailer.entity.Retailer;
+import za.co.shoppingdiary.retailer.repository.RetailerRepository;
+import za.co.shoppingdiary.store.entity.Store;
+import za.co.shoppingdiary.store.repository.StoreRepository;
 
 import java.io.InputStreamReader;
 import java.io.Reader;

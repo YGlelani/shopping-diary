@@ -8,9 +8,10 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
-import za.co.shoppingdiary.user.Role;
-import za.co.shoppingdiary.user.User;
-import za.co.shoppingdiary.user.UserRepository;
+
+import za.co.shoppingdiary.user.entity.Role;
+import za.co.shoppingdiary.user.entity.User;
+import za.co.shoppingdiary.user.repository.UserRepository;
 
 @Slf4j
 @Component
