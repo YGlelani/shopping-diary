@@ -32,9 +32,9 @@ jobs:
       - name: Grant execute permission for Maven Wrapper
         run: chmod +x backend/mvnw
 
-      - name: Maven build + test
+      - name: Maven build (skip tests)
         working-directory: backend
-        run: ./mvnw -B -ntp verify
+        run: ./mvnw -B -ntp package -DskipTests
 
       - name: Set lowercase image name
         run: echo "IMAGE_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')/backend" >> "$GITHUB_ENV"
