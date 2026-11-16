@@ -1,0 +1,7 @@
+retailer_slug,store_code,store_name,store_address,store_lat,store_lon,store_city,store_province,product_name,brand,barcode,size_text,shelf_price,promo_price,stock_status
+checkers,WC001,Checkers Sea Point,"1 Main Rd, Sea Point",-33.9169,18.3847,Cape Town,Western Cape,Full Cream Milk 2L,Clover,6001234567890,2L,32.99,29.99,IN_STOCK
+checkers,WC001,Checkers Sea Point,"1 Main Rd, Sea Point",-33.9169,18.3847,Cape Town,Western Cape,White Bread 700g,Albany,6001234567891,700g,18.99,,IN_STOCK
+checkers,WC001,Checkers Sea Point,"1 Main Rd, Sea Point",-33.9169,18.3847,Cape Town,Western Cape,Eggs Large 6 Pack,,6001234567892,6 pack,21.99,,IN_STOCK
+picknpay,WC002,Pick n Pay Green Point,"2 Main Rd, Green Point",-33.9069,18.4047,Cape Town,Western Cape,Full Cream Milk 2L,Clover,6001234567890,2L,34.99,,IN_STOCK
+picknpay,WC002,Pick n Pay Green Point,"2 Main Rd, Green Point",-33.9069,18.4047,Cape Town,Western Cape,White Bread 700g,Albany,6001234567891,700g,17.49,,IN_STOCK
+picknpay,WC002,Pick n Pay Green Point,"2 Main Rd, Green Point",-33.9069,18.4047,Cape Town,Western Cape,Eggs Large 6 Pack,,6001234567892,6 pack,22.49,,IN_STOCK
