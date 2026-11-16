@@ -17,6 +17,7 @@ import java.util.Map;
 public class ShoppingListController {
 
     private final ShoppingListService service;
+    private final BasketOptimizerService optimizerService;
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -70,4 +71,11 @@ public class ShoppingListController {
         }
         return service.baskets(me.getId(), id, lat, lon, radiusKm);
     }
+
+    @PostMapping("/{id}/optimize")
+public OptimizeResponse optimize(@AuthenticationPrincipal UserPrincipal me,
+                                 @PathVariable Long id,
+                                 @Valid @RequestBody OptimizeRequest req) {
+    return optimizerService.optimize(me.getId(), id, req);
+}
 }
