@@ -1,58 +1,61 @@
-name: backend-ci
+name: Build and Push Backend
 
 on:
   push:
-    branches: [main]
-    paths: ["backend/**", ".github/workflows/backend-ci.yml"]
-  pull_request:
-    paths: ["backend/**"]
-  workflow_dispatch:
+    branches: [ "main" ]
+    paths: 
+      - 'backend/**'
+      - '.github/workflows/backend-ci.yml'
+  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
 
 env:
   REGISTRY: ghcr.io
+  # This formats the image name as: ghcr.io/your-username/shopping-diary/backend
   IMAGE_NAME: ${{ github.repository }}/backend
 
 jobs:
-  build:
+  build-and-push:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
-          java-version: "21"
-          distribution: "temurin"
-          cache: maven
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
 
-      - name: Maven build + test
-        working-directory: backend
-        run: mvn -B -ntp verify
+      # Optional but recommended: Run tests before building the Docker image
+      - name: Build and Test with Maven
+        working-directory: ./backend
+        run: mvn -B clean verify
 
       - name: Set up Docker Buildx
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & push image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
-          context: backend
+          context: ./backend
+          file: ./backend/Dockerfile
           push: true
+          # Tags the image as "latest" and with the specific commit SHA
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          # Enables caching to speed up future builds
           cache-from: type=gha
           cache-to: type=gha,mode=max
