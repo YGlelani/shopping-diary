@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
-import { ShoppingCart, LogOut } from 'lucide-react'; // <-- Import header icons
+import { useState, useEffect, useCallback } from 'react'; // <-- Add useCallback
+import { ShoppingCart, LogOut } from 'lucide-react';
 import { apiRequest } from '../api/client';
 import ProductSearch from '../components/ProductSearch';
 import ShoppingList from '../components/ShoppingList';
 import OptimizerResult from '../components/OptimizerResult';
 import LocationPicker from '../components/LocationPicker';
-import ProductDetailsModal from '../components/ProductDetailsModal'; // <-- Import Modal
+import ProductDetailsModal from '../components/ProductDetailsModal';
 
 export default function Dashboard({ token, email, onLogout }) {
   const [listId, setListId] = useState(null);
@@ -14,8 +14,6 @@ export default function Dashboard({ token, email, onLogout }) {
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [error, setError] = useState('');
   const [location, setLocation] = useState({ lat: -33.91, lon: 18.39 });
-  
-  // Modal State
   const [selectedProduct, setSelectedProduct] = useState(null);
 
   useEffect(() => {
@@ -37,10 +35,11 @@ export default function Dashboard({ token, email, onLogout }) {
     initList();
   }, [token, onLogout]);
 
-  const handleLocationChange = (lat, lon) => {
+  // THE FIX IS HERE: Wrapping in useCallback with an empty dependency array []
+  const handleLocationChange = useCallback((lat, lon) => {
     setLocation({ lat, lon });
     setOptimization(null); 
-  };
+  }, []); 
 
   const addToCart = async (productId) => {
     try {
@@ -94,7 +93,7 @@ export default function Dashboard({ token, email, onLogout }) {
             onAddProduct={addToCart} 
             lat={location.lat} 
             lon={location.lon} 
-            onViewDetails={setSelectedProduct} // <-- Pass the setter
+            onViewDetails={setSelectedProduct} 
           />
         </div>
 
@@ -105,11 +104,12 @@ export default function Dashboard({ token, email, onLogout }) {
         </div>
       </main>
 
-      {/* THE MODAL RENDERS HERE */}
       {selectedProduct && (
         <ProductDetailsModal 
           product={selectedProduct} 
           onClose={() => setSelectedProduct(null)} 
+          lat={location.lat} 
+          lon={location.lon}
         />
       )}
     </div>
