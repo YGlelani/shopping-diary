@@ -4,7 +4,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
-
 import za.co.shoppingdiary.list.dto.*;
 import za.co.shoppingdiary.list.entity.ShoppingListItem;
 import za.co.shoppingdiary.list.repository.ShoppingListItemRepository;
@@ -31,7 +30,6 @@ public class BasketOptimizerService {
         lists.findByIdAndUserId(listId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("List not found"));
 
-        // Safely handle request parameters (prevents nulls if UI leaves fields blank)
         double safeRadiusKm = req.getRadiusKm() != null ? req.getRadiusKm() : 15.0;
         BigDecimal safeCostPerKm = req.getCostPerKm() != null ? req.getCostPerKm() : new BigDecimal("4.50");
 
@@ -46,7 +44,7 @@ public class BasketOptimizerService {
             throw new IllegalArgumentException("List has no resolvable items to optimize");
         }
 
-        // 3. Load the (item × store) price matrix
+        // 3. Load the (item × store) price matrix and active promotions
         Map<Long, StoreCandidate> storesById = new LinkedHashMap<>();
         Map<Long, ItemCandidate> itemsById = new LinkedHashMap<>();
 
@@ -66,19 +64,28 @@ public class BasketOptimizerService {
             latest_price AS (
                 SELECT DISTINCT ON (po.product_id, po.store_id)
                        po.product_id, po.store_id,
-                       COALESCE(po.promo_price, po.shelf_price) AS effective_price
+                       po.shelf_price, po.promo_price,
+                       po.observed_at
                 FROM price_observations po
                 ORDER BY po.product_id, po.store_id, po.observed_at DESC
+            ),
+            active_promos AS (
+                SELECT pr.product_id, pr.store_id, pr.promo_price, pr.min_quantity
+                FROM promotions pr
+                WHERE pr.status = 'ACTIVE' AND CURRENT_DATE BETWEEN pr.start_date AND pr.end_date
             )
             SELECT ns.id AS store_id, ns.name AS store_name,
                    ns.retailer_name, ns.distance_km,
                    li.id AS item_id, li.product_id, li.quantity,
                    p.canonical_name AS product_name,
-                   lp.effective_price
+                   lp.shelf_price, lp.promo_price AS regular_promo,
+                   ap.promo_price AS multi_buy_promo, ap.min_quantity
             FROM nearby_stores ns
             CROSS JOIN shopping_list_items li
             LEFT JOIN latest_price lp
                    ON lp.store_id = ns.id AND lp.product_id = li.product_id
+            LEFT JOIN active_promos ap
+                   ON ap.store_id = ns.id AND ap.product_id = li.product_id
             LEFT JOIN products p ON p.id = li.product_id
             WHERE li.list_id = :listId AND li.product_id IS NOT NULL
             """;
@@ -90,7 +97,6 @@ public class BasketOptimizerService {
                 .addValue("radiusMeters", safeRadiusKm * 1000);
 
         jdbc.query(sql, params, rs -> {
-            // THE FIX: Explicitly loop through the ResultSet
             while (rs.next()) {
                 long storeId = rs.getLong("store_id");
                 long itemId = rs.getLong("item_id");
@@ -119,8 +125,16 @@ public class BasketOptimizerService {
                     return i;
                 });
 
-                BigDecimal price = rs.getBigDecimal("effective_price");
-                if (price != null) store.pricesByProduct.put(item.productId, price);
+                // Attach the full price data (including promos) to the store
+                BigDecimal shelf = rs.getBigDecimal("shelf_price");
+                if (shelf != null) {
+                    store.pricesByProduct.put(item.productId, new PriceData(
+                        shelf,
+                        rs.getBigDecimal("regular_promo"),
+                        rs.getBigDecimal("multi_buy_promo"),
+                        rs.getObject("min_quantity") != null ? rs.getInt("min_quantity") : null
+                    ));
+                }
             }
             return null;
         });
@@ -201,20 +215,57 @@ public class BasketOptimizerService {
         // Assign each item to cheapest store in subset
         for (ItemCandidate item : allItems) {
             Long bestStore = null;
-            BigDecimal bestPrice = null;
+            BigDecimal bestEffectiveUnitPrice = null;
+            BigDecimal bestTotalCost = null;
+
             for (StoreCandidate store : subset) {
-                BigDecimal p = store.pricesByProduct.get(item.productId);
-                if (p != null && (bestPrice == null || p.compareTo(bestPrice) < 0)) {
-                    bestPrice = p;
+                PriceData priceData = store.pricesByProduct.get(item.productId);
+                if (priceData == null || priceData.shelfPrice() == null) continue;
+
+                BigDecimal effectiveUnitPrice = priceData.shelfPrice();
+                
+                // 1. Apply regular discount (e.g. 20% off)
+                if (priceData.regularPromo() != null && priceData.regularPromo().compareTo(effectiveUnitPrice) < 0) {
+                    effectiveUnitPrice = priceData.regularPromo();
+                }
+
+                // 2. Apply multi-buy promo (e.g. Buy 2 for R50)
+                if (priceData.multiBuyPromo() != null && priceData.minQuantity() != null && priceData.minQuantity() > 0) {
+                    int intQty = item.quantity.intValue();
+                    
+                    if (intQty >= priceData.minQuantity()) {
+                        int bundles = intQty / priceData.minQuantity();
+                        int remainder = intQty % priceData.minQuantity();
+                        
+                        BigDecimal bundleCost = priceData.multiBuyPromo().multiply(new BigDecimal(bundles));
+                        BigDecimal remainderCost = priceData.shelfPrice().multiply(new BigDecimal(remainder));
+                        BigDecimal totalCostForBundles = bundleCost.add(remainderCost);
+                        
+                        // Calculate the effective unit price for sorting
+                        BigDecimal multiBuyUnitPrice = totalCostForBundles.divide(item.quantity, 2, RoundingMode.HALF_UP);
+                        
+                        if (multiBuyUnitPrice.compareTo(effectiveUnitPrice) < 0) {
+                            effectiveUnitPrice = multiBuyUnitPrice;
+                        }
+                    }
+                }
+
+                BigDecimal totalCost = effectiveUnitPrice.multiply(item.quantity);
+
+                // Check if this store provides the lowest total cost for this item
+                if (bestTotalCost == null || totalCost.compareTo(bestTotalCost) < 0) {
+                    bestTotalCost = totalCost;
+                    bestEffectiveUnitPrice = effectiveUnitPrice;
                     bestStore = store.id;
                 }
             }
+
             if (bestStore == null) {
                 missing++;
             } else {
                 itemToStore.put(item.itemId, bestStore);
-                itemToPrice.put(item.itemId, bestPrice);
-                productCost = productCost.add(item.quantity.multiply(bestPrice));
+                itemToPrice.put(item.itemId, bestEffectiveUnitPrice);
+                productCost = productCost.add(bestEffectiveUnitPrice.multiply(item.quantity));
             }
         }
 
@@ -266,12 +317,14 @@ public class BasketOptimizerService {
 
     // ---- inner types ----
 
+    record PriceData(BigDecimal shelfPrice, BigDecimal regularPromo, BigDecimal multiBuyPromo, Integer minQuantity) {}
+
     static class StoreCandidate {
         Long id;
         String name;
         String retailerName;
         double distanceKm;
-        Map<Long, BigDecimal> pricesByProduct;
+        Map<Long, PriceData> pricesByProduct;
     }
 
     static class ItemCandidate {

@@ -1,9 +1,8 @@
-package za.co.shoppingdiary.ingestion.csv;
+package za.co.shoppingdiary.ingestion.csv.dto; // <-- Fixed package
 
 import java.util.List;
 
 public class ImportResult {
-
     private final int imported;
     private final int skipped;
     private final List<RowError> errors;
@@ -14,20 +13,11 @@ public class ImportResult {
         this.errors = errors;
     }
 
-    public int getImported() {
-        return imported;
-    }
-
-    public int getSkipped() {
-        return skipped;
-    }
-
-    public List<RowError> getErrors() {
-        return errors;
-    }
+    public int getImported() { return imported; }
+    public int getSkipped() { return skipped; }
+    public List<RowError> getErrors() { return errors; }
 
     public static class RowError {
-
         private final long rowNumber;
         private final String message;
 
@@ -36,12 +26,7 @@ public class ImportResult {
             this.message = message;
         }
 
-        public long getRowNumber() {
-            return rowNumber;
-        }
-
-        public String getMessage() {
-            return message;
-        }
+        public long getRowNumber() { return rowNumber; }
+        public String getMessage() { return message; }
     }
 }

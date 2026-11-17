@@ -1,6 +1,8 @@
-package za.co.shoppingdiary.ingestion.scraper;
+package za.co.shoppingdiary.ingestion.scraper.controller;
 
 import lombok.RequiredArgsConstructor;
+import za.co.shoppingdiary.ingestion.scraper.service.ScraperService;
+
 import org.springframework.web.bind.annotation.*;
 
 @RestController

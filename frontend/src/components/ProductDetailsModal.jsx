@@ -1,23 +1,25 @@
 import { useEffect, useState } from 'react';
-import { X, TrendingDown, Store, MapPin } from 'lucide-react';
+import { X, TrendingDown, Store, MapPin, Bell } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { apiRequest } from '../api/client';
 
-export default function ProductDetailsModal({ product, onClose, lat, lon }) {
+export default function ProductDetailsModal({ product, onClose, lat, lon, token }) {
   const [history, setHistory] = useState([]);
   const [currentPrices, setCurrentPrices] = useState([]);
   const [loading, setLoading] = useState(true);
+  
+  // Alert state
+  const [targetPrice, setTargetPrice] = useState('');
+  const [alertStatus, setAlertStatus] = useState(''); // 'idle', 'success', 'error'
 
   useEffect(() => {
     async function fetchData() {
       try {
-        // Fetch both endpoints in parallel
         const [historyData, pricesData] = await Promise.all([
           apiRequest(`/products/${product.productId}/history`),
-          apiRequest(`/products/${product.productId}/prices?lat=${lat}&lon=${lon}&r=50`) // 50km radius for online stores
+          apiRequest(`/products/${product.productId}/prices?lat=${lat}&lon=${lon}&r=50`)
         ]);
 
-        // Process history for chart
         const grouped = historyData.reduce((acc, row) => {
           const date = new Date(row.observedAt).toLocaleDateString();
           if (!acc[date]) acc[date] = { date };
@@ -35,6 +37,25 @@ export default function ProductDetailsModal({ product, onClose, lat, lon }) {
     fetchData();
   }, [product.productId, lat, lon]);
 
+  const handleSetAlert = async () => {
+    if (!targetPrice || isNaN(targetPrice)) return;
+    setAlertStatus('loading');
+    try {
+      await apiRequest('/alerts', {
+        method: 'POST',
+        body: JSON.stringify({ 
+          productId: product.productId, 
+          targetPrice: parseFloat(targetPrice) 
+        })
+      }, token);
+      setAlertStatus('success');
+      setTargetPrice('');
+    } catch (err) {
+      setAlertStatus('error');
+      alert("Error setting alert: " + err.message);
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl overflow-hidden max-h-[90vh] flex flex-col">
@@ -50,9 +71,39 @@ export default function ProductDetailsModal({ product, onClose, lat, lon }) {
           </button>
         </div>
 
-        {/* Body (Scrollable) */}
+        {/* Body */}
         <div className="p-6 overflow-y-auto space-y-8">
           
+          {/* Price Alert Section */}
+          <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-blue-800 flex items-center gap-2">
+                <Bell size={16} /> Set Price Alert
+              </h3>
+              <p className="text-xs text-blue-600 mt-1">
+                {alertStatus === 'success' 
+                  ? "✅ Alert set! We'll notify you when it drops." 
+                  : "We'll notify you when the price drops below:"}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <input 
+                type="number" 
+                placeholder="e.g. 25.00"
+                value={targetPrice}
+                onChange={(e) => setTargetPrice(e.target.value)}
+                className="w-24 px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <button 
+                onClick={handleSetAlert}
+                disabled={alertStatus === 'loading'}
+                className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700 transition disabled:opacity-50"
+              >
+                {alertStatus === 'loading' ? 'Saving...' : 'Notify Me'}
+              </button>
+            </div>
+          </div>
+
           {/* Current Prices Table */}
           <div>
             <h3 className="text-sm font-semibold text-gray-600 mb-4 flex items-center gap-2">

@@ -1,4 +1,4 @@
-package za.co.shoppingdiary.ingestion.csv;
+package za.co.shoppingdiary.ingestion.csv.service;
 
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.csv.CSVFormat;
@@ -13,6 +13,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import za.co.shoppingdiary.ingestion.csv.dto.ImportResult;
+import za.co.shoppingdiary.ingestion.csv.dto.ImportResult.RowError;
 import za.co.shoppingdiary.product.entity.Product;
 import za.co.shoppingdiary.product.repository.ProductRepository;
 import za.co.shoppingdiary.retailer.entity.Retailer;

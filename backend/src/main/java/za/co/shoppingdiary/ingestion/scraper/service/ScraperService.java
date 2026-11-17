@@ -1,6 +1,8 @@
-package za.co.shoppingdiary.ingestion.scraper;
+package za.co.shoppingdiary.ingestion.scraper.service;
 
 import lombok.RequiredArgsConstructor;
+import za.co.shoppingdiary.ingestion.scraper.RetailerScraper;
+
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.springframework.stereotype.Service;

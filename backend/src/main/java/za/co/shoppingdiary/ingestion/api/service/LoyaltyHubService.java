@@ -1,4 +1,4 @@
-package za.co.shoppingdiary.ingestion.api;
+package za.co.shoppingdiary.ingestion.api.service; // <-- Fixed package
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,7 +16,6 @@ import za.co.shoppingdiary.ingestion.api.dto.LoyaltyHubResponse;
 import java.math.BigDecimal;
 import java.security.MessageDigest;
 import java.time.Instant;
-import java.time.format.DateTimeFormatter;
 import java.util.HexFormat;
 import java.util.List;
 
@@ -34,7 +33,7 @@ public class LoyaltyHubService {
     public void syncSearchResults(String searchQuery) {
         log.info("Starting LoyaltyHub sync for query: {}", searchQuery);
 
-        String url = "https://loyaltyhub.co.za/api/v1/prices?search=" + searchQuery + "&limit=10"; // 10 rows per page on free tier
+        String url = "https://loyaltyhub.co.za/api/v1/prices?search=" + searchQuery + "&limit=10";
 
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(apiKey);
@@ -66,28 +65,22 @@ public class LoyaltyHubService {
 
     private boolean savePriceObservation(LoyaltyHubPrice data) {
         try {
-            // 1. Resolve the Store (We map the retailer to an "Online" store)
             Long storeId = getOrCreateOnlineStore(data.getRetailer());
             if (storeId == null) return false;
 
-            // 2. Resolve the Product (Match by barcode, then name)
             Long productId = getOrCreateProduct(data.getName(), data.getBarcode(), data.getBrand());
             if (productId == null) return false;
 
-            // 3. Prepare price and dates
             BigDecimal shelfPrice = data.getPrice();
-            BigDecimal promoPrice = data.getWasPrice(); // If wasPrice exists, the current price is a promo
+            BigDecimal promoPrice = data.getWasPrice(); 
             
-            // Convert ISO string (e.g. "2026-11-10T08:40:05Z") to Instant
             Instant observedAt = data.getLastSeenAt() != null 
                     ? Instant.parse(data.getLastSeenAt()) 
                     : Instant.now();
 
-            // 4. Generate unique hash
-            String date = observedAt.toString().substring(0, 10); // Just the YYYY-MM-DD part
+            String date = observedAt.toString().substring(0, 10); 
             String hash = sha256(productId + "|" + storeId + "|" + shelfPrice + "|" + date);
 
-            // 5. Insert
             int rows = jdbc.update("""
                 INSERT INTO price_observations
                 (product_id, store_id, source_type, source_reference, observed_at, shelf_price, promo_price, stock_status, verification_status, content_hash, unit_price)
@@ -107,17 +100,14 @@ public class LoyaltyHubService {
     }
 
     private Long getOrCreateOnlineStore(String retailerSlug) {
-        // Normalize slugs (LoyaltyHub uses "shoprite", "pnp", etc.)
         String normalizedSlug = retailerSlug.equals("pnp") ? "picknpay" : retailerSlug;
 
-        // Check if we have an "Online" store for this retailer
         List<Long> ids = jdbc.queryForList(
             "SELECT s.id FROM stores s JOIN retailers r ON r.id = s.retailer_id WHERE r.slug = ? AND s.store_code = 'ONLINE'",
             Long.class, normalizedSlug);
 
         if (!ids.isEmpty()) return ids.get(0);
 
-        // If not, create it (using dummy coordinates in SA)
         try {
             Long retailerId = jdbc.queryForObject("SELECT id FROM retailers WHERE slug = ?", Long.class, normalizedSlug);
             jdbc.update("""
