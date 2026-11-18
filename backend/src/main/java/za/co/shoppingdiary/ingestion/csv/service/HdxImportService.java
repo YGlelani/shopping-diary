@@ -68,21 +68,22 @@ public class HdxImportService {
         Long retailerId = getOrCreateWfpRetailer();
 
         try (Reader reader = new InputStreamReader(inputStream, StandardCharsets.UTF_8);
-             CSVParser parser = CSVFormat.DEFAULT.builder()
-                     .setHeader()
-                     .setSkipHeaderRecord(true)
-                     .setIgnoreSurroundingSpaces(true)
-                     .setTrim(true)
-                     .build()
-                     .parse(reader)) {
+                CSVParser parser = CSVFormat.DEFAULT.builder()
+                        .setHeader()
+                        .setSkipHeaderRecord(true)
+                        .setIgnoreSurroundingSpaces(true)
+                        .setTrim(true)
+                        .build()
+                        .parse(reader)) {
 
             for (CSVRecord row : parser) {
                 long rowNumber = row.getRecordNumber();
                 try {
                     String dateStr = get(row, "date");
                     String market = get(row, "admin1"); // WFP CSV often uses admin1 or market
-                    if (market == null) market = get(row, "market"); // fallback
-                    
+                    if (market == null)
+                        market = get(row, "market"); // fallback
+
                     String commodity = get(row, "commodity");
                     String priceStr = get(row, "price");
                     String currency = get(row, "currency");
@@ -106,16 +107,19 @@ public class HdxImportService {
 
                     String hash = sha256(productId + "|" + storeId + "|" + price + "|" + date);
 
-                    int rows = jdbc.update("""
-                        INSERT INTO price_observations
-                        (product_id, store_id, source_type, source_reference, observed_at, shelf_price, stock_status, verification_status, content_hash)
-                        VALUES (?, ?, 'CSV', 'WFP-Historical', ?, ?, 'IN_STOCK', 'VERIFIED', ?)
-                        ON CONFLICT (content_hash) DO NOTHING
-                        """,
-                        productId, storeId, java.sql.Timestamp.valueOf(date.atStartOfDay()), price, hash);
+                    int rows = jdbc.update(
+                            """
+                                    INSERT INTO price_observations
+                                    (product_id, store_id, source_type, source_reference, observed_at, shelf_price, stock_status, verification_status, content_hash)
+                                    VALUES (?, ?, 'CSV', 'WFP-Historical', ?, ?, 'IN_STOCK', 'VERIFIED', ?)
+                                    ON CONFLICT (content_hash) DO NOTHING
+                                    """,
+                            productId, storeId, java.sql.Timestamp.valueOf(date.atStartOfDay()), price, hash);
 
-                    if (rows > 0) imported++;
-                    else skipped++;
+                    if (rows > 0)
+                        imported++;
+                    else
+                        skipped++;
 
                 } catch (Exception ex) {
                     errors.add(new ImportResult.RowError(rowNumber, ex.getMessage()));
@@ -129,37 +133,43 @@ public class HdxImportService {
     }
 
     private String get(CSVRecord row, String column) {
-        if (!row.isMapped(column)) return null;
+        if (!row.isMapped(column))
+            return null;
         String val = row.get(column);
         return (val == null || val.isBlank()) ? null : val.trim();
     }
 
     private Long getOrCreateWfpRetailer() {
         List<Long> ids = jdbc.queryForList("SELECT id FROM retailers WHERE slug = 'wfp'", Long.class);
-        if (!ids.isEmpty()) return ids.get(0);
+        if (!ids.isEmpty())
+            return ids.get(0);
         jdbc.update("INSERT INTO retailers (name, slug) VALUES ('WFP Historical', 'wfp')");
         return jdbc.queryForObject("SELECT id FROM retailers WHERE slug = 'wfp'", Long.class);
     }
 
     private Long getOrCreateHistoricalStore(Long retailerId, String marketName) {
         List<Long> ids = jdbc.queryForList(
-            "SELECT id FROM stores WHERE retailer_id = ? AND name = ?",
-            Long.class, retailerId, marketName);
-        if (!ids.isEmpty()) return ids.get(0);
+                "SELECT id FROM stores WHERE retailer_id = ? AND name = ?",
+                Long.class, retailerId, marketName);
+        if (!ids.isEmpty())
+            return ids.get(0);
 
         jdbc.update("""
-            INSERT INTO stores (retailer_id, name, store_code, location, city, store_type)
-            VALUES (?, ?, ?, ST_SetSRID(ST_MakePoint(24.0, -29.0), 4326), ?, 'SUPERMARKET')
-            """, retailerId, marketName, "WFP-" + marketName.replace(" ", "-"), marketName);
-        
-        return jdbc.queryForObject("SELECT id FROM stores WHERE retailer_id = ? AND name = ?", Long.class, retailerId, marketName);
+                INSERT INTO stores (retailer_id, name, store_code, location, city, store_type)
+                VALUES (?, ?, ?, ST_SetSRID(ST_MakePoint(24.0, -29.0), 4326), ?, 'SUPERMARKET')
+                """, retailerId, marketName, "WFP-" + marketName.replace(" ", "-"), marketName);
+
+        return jdbc.queryForObject("SELECT id FROM stores WHERE retailer_id = ? AND name = ?", Long.class, retailerId,
+                marketName);
     }
 
     private Long getOrCreateHistoricalProduct(String commodity) {
         List<Long> ids = jdbc.queryForList("SELECT id FROM products WHERE canonical_name = ?", Long.class, commodity);
-        if (!ids.isEmpty()) return ids.get(0);
+        if (!ids.isEmpty())
+            return ids.get(0);
 
-        jdbc.update("INSERT INTO products (canonical_name, base_unit) VALUES (?, 'kg')", commodity);
+        jdbc.update("INSERT INTO products (canonical_name, base_unit, category) VALUES (?, 'kg', 'Staples')",
+                commodity);
         return jdbc.queryForObject("SELECT id FROM products WHERE canonical_name = ?", Long.class, commodity);
     }
 
@@ -167,6 +177,8 @@ public class HdxImportService {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(md.digest(input.getBytes(StandardCharsets.UTF_8)));
-        } catch (Exception e) { throw new RuntimeException(e); }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 }

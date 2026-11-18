@@ -1,4 +1,4 @@
-package za.co.shoppingdiary.ingestion.api.service; // <-- Fixed package
+package za.co.shoppingdiary.ingestion.api.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -6,8 +6,8 @@ import org.springframework.core.io.Resource;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-import za.co.shoppingdiary.ingestion.csv.service.HdxImportService; // <-- Fixed import
-import za.co.shoppingdiary.ingestion.csv.dto.ImportResult; // <-- Fixed import
+import za.co.shoppingdiary.ingestion.csv.dto.ImportResult;
+import za.co.shoppingdiary.ingestion.csv.service.HdxImportService;
 
 @Slf4j
 @Service
@@ -20,6 +20,7 @@ public class HdxDownloadService {
     private static final String HDX_CSV_URL =
         "https://data.humdata.org/dataset/279cf561-64db-4bef-a9dd-077af3c5651a/resource/63910cdd-51a0-4244-94b6-0115d615aad2/download/hdx_hapi_food_price_zaf.csv";
 
+    // Runs every Monday at 3:00 AM
     @Scheduled(cron = "0 0 3 * * MON")
     public void downloadAndImportHdxData() {
         log.info("Starting automated HDX price import...");
@@ -32,10 +33,11 @@ public class HdxDownloadService {
             }
 
             ImportResult result = hdxImportService.importFromResource(csvResource);
-            log.info("HDX automated import completed. Imported: {}, Skipped: {}", result.getImported(), result.getSkipped());
+            log.info("HDX import completed. Imported: {}, Skipped: {}", result.getImported(), result.getSkipped());
 
         } catch (Exception e) {
             log.error("Failed to download or import HDX data: {}", e.getMessage(), e);
+            throw new RuntimeException("HDX Import failed: " + e.getMessage());
         }
     }
 }

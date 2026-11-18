@@ -44,6 +44,12 @@ public class Product {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    @Column(name = "image_url", length = 1000)
+    private String imageUrl;
+
+    @Column(length = 100)
+    private String category;
+
     @PrePersist
     void onCreate() {
         this.createdAt = Instant.now();

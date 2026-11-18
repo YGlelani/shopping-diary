@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import za.co.shoppingdiary.ingestion.api.dto.ReefApiProduct;
 import za.co.shoppingdiary.ingestion.api.dto.ReefApiResponse;
+import org.springframework.web.client.RestClientException;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -30,7 +31,11 @@ public class ReefApiService {
     public void syncPromotions(String retailerSlug) {
         log.info("Starting ReefAPI promotion sync for: {}", retailerSlug);
 
-        // Example endpoint (Replace with actual ReefAPI endpoint from their docs)
+        if (apiKey == null || apiKey.isBlank() || apiKey.equals("your_reef_api_key_here")) {
+            throw new IllegalArgumentException(
+                    "ReefAPI key is not configured. Please add REEFAPI_KEY to your environment variables.");
+        }
+
         String url = "https://api.reefapi.com/v1/promotions?retailer=" + retailerSlug;
 
         HttpHeaders headers = new HttpHeaders();
@@ -50,13 +55,18 @@ public class ReefApiService {
             int savedCount = 0;
 
             for (ReefApiProduct promo : promos) {
-                if (savePromotion(promo, retailerSlug)) savedCount++;
+                if (savePromotion(promo, retailerSlug))
+                    savedCount++;
             }
 
             log.info("ReefAPI sync complete. Saved {} active promotions.", savedCount);
 
+        } catch (RestClientException e) {
+            log.error("ReefAPI HTTP Error: {}", e.getMessage());
+            throw new IllegalArgumentException("Failed to connect to ReefAPI. Check your API key and network.");
         } catch (Exception e) {
             log.error("Failed to sync from ReefAPI: {}", e.getMessage());
+            throw new IllegalArgumentException("ReefAPI parsing error: " + e.getMessage());
         }
     }
 
@@ -64,36 +74,40 @@ public class ReefApiService {
         try {
             // 1. Resolve Product by Barcode
             List<Long> productIds = jdbc.queryForList(
-                "SELECT id FROM products WHERE barcode = ?", Long.class, promo.getBarcode());
-            
-            if (productIds.isEmpty()) return false; // We don't track this product yet
+                    "SELECT id FROM products WHERE barcode = ?", Long.class, promo.getBarcode());
+
+            if (productIds.isEmpty())
+                return false; // We don't track this product yet
             Long productId = productIds.get(0);
 
             // 2. Resolve Store (Usually an "Online" or specific store)
             List<Long> storeIds = jdbc.queryForList(
-                "SELECT s.id FROM stores s JOIN retailers r ON r.id = s.retailer_id WHERE r.slug = ? LIMIT 1",
-                Long.class, retailerSlug);
-            
-            if (storeIds.isEmpty()) return false;
+                    "SELECT s.id FROM stores s JOIN retailers r ON r.id = s.retailer_id WHERE r.slug = ? LIMIT 1",
+                    Long.class, retailerSlug);
+
+            if (storeIds.isEmpty())
+                return false;
             Long storeId = storeIds.get(0);
 
             // 3. Parse Dates (fallback to today + 7 days if API doesn't provide)
-            LocalDate startDate = promo.getStartDate() != null ? LocalDate.parse(promo.getStartDate()) : LocalDate.now();
-            LocalDate endDate = promo.getEndDate() != null ? LocalDate.parse(promo.getEndDate()) : LocalDate.now().plusDays(7);
+            LocalDate startDate = promo.getStartDate() != null ? LocalDate.parse(promo.getStartDate())
+                    : LocalDate.now();
+            LocalDate endDate = promo.getEndDate() != null ? LocalDate.parse(promo.getEndDate())
+                    : LocalDate.now().plusDays(7);
 
             // 4. Insert or Update Promotion
             // We use ON CONFLICT to update the price if the promotion already exists
-            jdbc.update("""
-                INSERT INTO promotions 
-                (product_id, store_id, promo_type, description, promo_price, min_quantity, start_date, end_date, status)
-                VALUES (?, ?, 'MULTIBUY', ?, ?, ?, ?, ?, 'ACTIVE')
-                ON CONFLICT (product_id, store_id, start_date) 
-                DO UPDATE SET promo_price = EXCLUDED.promo_price, status = 'ACTIVE'
-                """,
-                productId, storeId, promo.getPromoDescription(), promo.getPromoPrice(),
-                promo.getMinQuantity() != null ? promo.getMinQuantity() : 1, 
-                java.sql.Date.valueOf(startDate), java.sql.Date.valueOf(endDate)
-            );
+            jdbc.update(
+                    """
+                            INSERT INTO promotions
+                            (product_id, store_id, promo_type, description, promo_price, min_quantity, start_date, end_date, status)
+                            VALUES (?, ?, 'MULTIBUY', ?, ?, ?, ?, ?, 'ACTIVE')
+                            ON CONFLICT (product_id, store_id, start_date)
+                            DO UPDATE SET promo_price = EXCLUDED.promo_price, status = 'ACTIVE'
+                            """,
+                    productId, storeId, promo.getPromoDescription(), promo.getPromoPrice(),
+                    promo.getMinQuantity() != null ? promo.getMinQuantity() : 1,
+                    java.sql.Date.valueOf(startDate), java.sql.Date.valueOf(endDate));
 
             return true;
         } catch (Exception e) {

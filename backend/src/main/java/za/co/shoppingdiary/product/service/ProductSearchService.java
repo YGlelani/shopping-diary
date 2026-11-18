@@ -37,8 +37,8 @@ public class ProductSearchService {
                     JOIN nearby_stores ns ON ns.id = po.store_id
                     ORDER BY po.product_id, po.store_id, po.observed_at DESC
                 )
-                SELECT p.id, p.canonical_name, p.brand, p.barcode, p.size_text,
-                       COUNT(DISTINCT lp.store_id) AS store_count,
+                SELECT p.id, p.canonical_name, p.brand, p.barcode, p.size_text, p.image_url, p.category,
+                   COUNT(DISTINCT lp.store_id) AS store_count,
                        MIN(COALESCE(lp.promo_price, lp.shelf_price)) AS min_price,
                        MAX(lp.observed_at) AS latest_observed_at
                 FROM products p
@@ -67,6 +67,8 @@ public class ProductSearchService {
             h.setMinEffectivePrice(rs.getBigDecimal("min_price"));
             OffsetDateTime ts = rs.getObject("latest_observed_at", OffsetDateTime.class);
             h.setLatestObservedAt(ts != null ? ts.toInstant() : null);
+            h.setImageUrl(rs.getString("image_url"));
+            h.setCategory(rs.getString("category"));
             return h;
         });
     }

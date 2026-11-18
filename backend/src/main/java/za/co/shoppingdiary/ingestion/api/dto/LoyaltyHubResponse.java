@@ -12,5 +12,7 @@ public class LoyaltyHubResponse {
     public static class Meta {
         private Integer count;
         private Integer total;
+        private Boolean hasMore;
+        private String updatedAt;
     }
 }

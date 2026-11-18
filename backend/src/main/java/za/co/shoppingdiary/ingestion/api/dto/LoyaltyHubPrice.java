@@ -10,7 +10,23 @@ public class LoyaltyHubPrice {
     private String barcode;
     private String name;
     private String brand;
+    
+    @JsonProperty("image_url")
+    private String imageUrl;
+    
     private BigDecimal price;
+    private String currency;
+    
+    @JsonProperty("unit_size")
+    private String unitSize;
+    
+    @JsonProperty("in_stock")
+    private Boolean inStock;
+    
+    private String category;
+    
+    @JsonProperty("last_seen_at")
+    private String lastSeenAt;
     
     @JsonProperty("was_price")
     private BigDecimal wasPrice;
@@ -18,8 +34,10 @@ public class LoyaltyHubPrice {
     @JsonProperty("on_promotion")
     private Boolean onPromotion;
     
-    @JsonProperty("last_seen_at")
-    private String lastSeenAt;
+    private String promotion;
+    
+    @JsonProperty("loyalty_price")
+    private BigDecimal loyaltyPrice;
     
     @JsonProperty("unit_price")
     private UnitPrice unitPrice;

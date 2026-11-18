@@ -1,4 +1,4 @@
-package za.co.shoppingdiary.ingestion.api.service; // <-- Fixed package
+package za.co.shoppingdiary.ingestion.api.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -33,7 +33,8 @@ public class LoyaltyHubService {
     public void syncSearchResults(String searchQuery) {
         log.info("Starting LoyaltyHub sync for query: {}", searchQuery);
 
-        String url = "https://loyaltyhub.co.za/api/v1/prices?search=" + searchQuery + "&limit=10";
+        // Request up to 50 items if on a paid plan, or 10 if on the free tier.
+        String url = "https://loyaltyhub.co.za/api/v1/prices?search=" + searchQuery + "&limit=50";
 
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(apiKey);
@@ -53,44 +54,55 @@ public class LoyaltyHubService {
 
             for (LoyaltyHubPrice priceData : prices) {
                 boolean saved = savePriceObservation(priceData);
-                if (saved) savedCount++;
+                if (saved)
+                    savedCount++;
             }
 
             log.info("LoyaltyHub sync complete. Saved {} new observations.", savedCount);
 
         } catch (Exception e) {
             log.error("Failed to sync from LoyaltyHub: {}", e.getMessage());
+            throw new IllegalArgumentException("LoyaltyHub API Error: " + e.getMessage());
         }
     }
 
     private boolean savePriceObservation(LoyaltyHubPrice data) {
         try {
             Long storeId = getOrCreateOnlineStore(data.getRetailer());
-            if (storeId == null) return false;
+            if (storeId == null)
+                return false;
 
-            Long productId = getOrCreateProduct(data.getName(), data.getBarcode(), data.getBrand());
-            if (productId == null) return false;
+            Long productId = getOrCreateProduct(data.getName(), data.getBarcode(), data.getBrand(), data.getImageUrl(),
+                    data.getCategory());
+            if (productId == null)
+                return false;
 
+            // Price Logic
             BigDecimal shelfPrice = data.getPrice();
-            BigDecimal promoPrice = data.getWasPrice(); 
-            
-            Instant observedAt = data.getLastSeenAt() != null 
-                    ? Instant.parse(data.getLastSeenAt()) 
+            BigDecimal promoPrice = data.getWasPrice(); // was_price implies the current price is a promo
+
+            // Extract the numeric unit price value if it exists
+            BigDecimal unitPriceValue = null;
+            if (data.getUnitPrice() != null) {
+                unitPriceValue = data.getUnitPrice().getValue();
+            }
+
+            Instant observedAt = data.getLastSeenAt() != null
+                    ? Instant.parse(data.getLastSeenAt())
                     : Instant.now();
 
-            String date = observedAt.toString().substring(0, 10); 
+            String date = observedAt.toString().substring(0, 10);
             String hash = sha256(productId + "|" + storeId + "|" + shelfPrice + "|" + date);
 
-            int rows = jdbc.update("""
-                INSERT INTO price_observations
-                (product_id, store_id, source_type, source_reference, observed_at, shelf_price, promo_price, stock_status, verification_status, content_hash, unit_price)
-                VALUES (?, ?, 'API', 'LoyaltyHub', ?, ?, ?, 'IN_STOCK', 'VERIFIED', ?, ?)
-                ON CONFLICT (content_hash) DO NOTHING
-                """,
-                productId, storeId, java.sql.Timestamp.from(observedAt), 
-                shelfPrice, promoPrice, hash,
-                data.getUnitPrice() != null ? data.getUnitPrice().getValue() : null
-            );
+            int rows = jdbc.update(
+                    """
+                            INSERT INTO price_observations
+                            (product_id, store_id, source_type, source_reference, observed_at, shelf_price, promo_price, stock_status, verification_status, content_hash, unit_price)
+                            VALUES (?, ?, 'API', 'LoyaltyHub', ?, ?, ?, 'IN_STOCK', 'VERIFIED', ?, ?)
+                            ON CONFLICT (content_hash) DO NOTHING
+                            """,
+                    productId, storeId, java.sql.Timestamp.from(observedAt),
+                    shelfPrice, promoPrice, hash, unitPriceValue);
 
             return rows > 0;
         } catch (Exception e) {
@@ -103,35 +115,43 @@ public class LoyaltyHubService {
         String normalizedSlug = retailerSlug.equals("pnp") ? "picknpay" : retailerSlug;
 
         List<Long> ids = jdbc.queryForList(
-            "SELECT s.id FROM stores s JOIN retailers r ON r.id = s.retailer_id WHERE r.slug = ? AND s.store_code = 'ONLINE'",
-            Long.class, normalizedSlug);
+                "SELECT s.id FROM stores s JOIN retailers r ON r.id = s.retailer_id WHERE r.slug = ? AND s.store_code = 'ONLINE'",
+                Long.class, normalizedSlug);
 
-        if (!ids.isEmpty()) return ids.get(0);
+        if (!ids.isEmpty())
+            return ids.get(0);
 
         try {
-            Long retailerId = jdbc.queryForObject("SELECT id FROM retailers WHERE slug = ?", Long.class, normalizedSlug);
-            jdbc.update("""
-                INSERT INTO stores (retailer_id, name, store_code, location, city, store_type)
-                VALUES (?, ?, 'ONLINE', ST_SetSRID(ST_MakePoint(28.0473, -26.2041), 4326), 'Johannesburg', 'SUPERMARKET')
-                """, retailerId, retailerSlug + " Online");
-            
-            return jdbc.queryForObject("SELECT id FROM stores WHERE retailer_id = ? AND store_code = 'ONLINE'", Long.class, retailerId);
+            Long retailerId = jdbc.queryForObject("SELECT id FROM retailers WHERE slug = ?", Long.class,
+                    normalizedSlug);
+            jdbc.update(
+                    """
+                            INSERT INTO stores (retailer_id, name, store_code, location, city, store_type)
+                            VALUES (?, ?, 'ONLINE', ST_SetSRID(ST_MakePoint(28.0473, -26.2041), 4326), 'Johannesburg', 'SUPERMARKET')
+                            """,
+                    retailerId, retailerSlug + " Online");
+
+            return jdbc.queryForObject("SELECT id FROM stores WHERE retailer_id = ? AND store_code = 'ONLINE'",
+                    Long.class, retailerId);
         } catch (Exception e) {
             log.error("Could not find or create retailer: {}", retailerSlug);
             return null;
         }
     }
 
-    private Long getOrCreateProduct(String name, String barcode, String brand) {
+    private Long getOrCreateProduct(String name, String barcode, String brand, String imageUrl, String category) {
         if (barcode != null && !barcode.isEmpty()) {
             List<Long> ids = jdbc.queryForList("SELECT id FROM products WHERE barcode = ?", Long.class, barcode);
-            if (!ids.isEmpty()) return ids.get(0);
+            if (!ids.isEmpty())
+                return ids.get(0);
         }
-        
-        List<Long> nameIds = jdbc.queryForList("SELECT id FROM products WHERE canonical_name = ?", Long.class, name);
-        if (!nameIds.isEmpty()) return nameIds.get(0);
 
-        jdbc.update("INSERT INTO products (canonical_name, barcode, brand) VALUES (?, ?, ?)", name, barcode, brand);
+        List<Long> nameIds = jdbc.queryForList("SELECT id FROM products WHERE canonical_name = ?", Long.class, name);
+        if (!nameIds.isEmpty())
+            return nameIds.get(0);
+
+        jdbc.update("INSERT INTO products (canonical_name, barcode, brand, image_url, category) VALUES (?, ?, ?, ?, ?)",
+                name, barcode, brand, imageUrl, category);
         return jdbc.queryForObject("SELECT id FROM products WHERE canonical_name = ?", Long.class, name);
     }
 
@@ -139,6 +159,8 @@ public class LoyaltyHubService {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(md.digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
-        } catch (Exception e) { throw new RuntimeException(e); }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 }

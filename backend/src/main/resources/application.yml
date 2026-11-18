@@ -63,4 +63,4 @@ loyaltyhub:
 
 reefapi:
   api:
-    key: ${REEFAPI_KEY:ak_live_bAzqncGkc_0PN0sd4jNFs_CWFFiICYnl}
+    key: ${REEFAPI_KEY:ak_live_tFceiuBq3ICX63kqR9jOczn3viLcWFzy}

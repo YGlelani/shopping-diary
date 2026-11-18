@@ -13,28 +13,87 @@ public class ProductSearchHit {
     private BigDecimal minEffectivePrice;
     private int storeCount;
     private Instant latestObservedAt;
+    private String imageUrl;
+    private String category;
+    // + getters and setters
 
-    public Long getProductId() { return productId; }
-    public void setProductId(Long productId) { this.productId = productId; }
+    public Long getProductId() {
+        return productId;
+    }
 
-    public String getCanonicalName() { return canonicalName; }
-    public void setCanonicalName(String canonicalName) { this.canonicalName = canonicalName; }
+    public void setProductId(Long productId) {
+        this.productId = productId;
+    }
 
-    public String getBrand() { return brand; }
-    public void setBrand(String brand) { this.brand = brand; }
+    public String getCanonicalName() {
+        return canonicalName;
+    }
 
-    public String getBarcode() { return barcode; }
-    public void setBarcode(String barcode) { this.barcode = barcode; }
+    public void setCanonicalName(String canonicalName) {
+        this.canonicalName = canonicalName;
+    }
 
-    public String getSizeText() { return sizeText; }
-    public void setSizeText(String sizeText) { this.sizeText = sizeText; }
+    public String getBrand() {
+        return brand;
+    }
 
-    public BigDecimal getMinEffectivePrice() { return minEffectivePrice; }
-    public void setMinEffectivePrice(BigDecimal minEffectivePrice) { this.minEffectivePrice = minEffectivePrice; }
+    public void setBrand(String brand) {
+        this.brand = brand;
+    }
 
-    public int getStoreCount() { return storeCount; }
-    public void setStoreCount(int storeCount) { this.storeCount = storeCount; }
+    public String getBarcode() {
+        return barcode;
+    }
 
-    public Instant getLatestObservedAt() { return latestObservedAt; }
-    public void setLatestObservedAt(Instant latestObservedAt) { this.latestObservedAt = latestObservedAt; }
+    public void setBarcode(String barcode) {
+        this.barcode = barcode;
+    }
+
+    public String getSizeText() {
+        return sizeText;
+    }
+
+    public void setSizeText(String sizeText) {
+        this.sizeText = sizeText;
+    }
+
+    public BigDecimal getMinEffectivePrice() {
+        return minEffectivePrice;
+    }
+
+    public void setMinEffectivePrice(BigDecimal minEffectivePrice) {
+        this.minEffectivePrice = minEffectivePrice;
+    }
+
+    public int getStoreCount() {
+        return storeCount;
+    }
+
+    public void setStoreCount(int storeCount) {
+        this.storeCount = storeCount;
+    }
+
+    public Instant getLatestObservedAt() {
+        return latestObservedAt;
+    }
+
+    public void setLatestObservedAt(Instant latestObservedAt) {
+        this.latestObservedAt = latestObservedAt;
+    }
+
+    public String getImageUrl() {
+        return imageUrl;
+    }
+
+    public void setImageUrl(String imageUrl) {
+        this.imageUrl = imageUrl;
+    }
+
+    public String getCategory() {
+        return category;
+    }
+
+    public void setCategory(String category) {
+        this.category = category;
+    }
 }
