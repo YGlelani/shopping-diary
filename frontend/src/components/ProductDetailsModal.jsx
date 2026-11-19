@@ -9,7 +9,7 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, token,
   const [history, setHistory] = useState([]);
   const [currentPrices, setCurrentPrices] = useState([]);
   const [loading, setLoading] = useState(true);
-  
+
   const [targetPrice, setTargetPrice] = useState('');
   const [alertStatus, setAlertStatus] = useState('idle');
 
@@ -44,9 +44,9 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, token,
     try {
       await apiRequest('/alerts', {
         method: 'POST',
-        body: JSON.stringify({ 
-          productId: product.productId, 
-          targetPrice: parseFloat(targetPrice) 
+        body: JSON.stringify({
+          productId: product.productId,
+          targetPrice: parseFloat(targetPrice)
         })
       }, token);
       setAlertStatus('success');
@@ -58,9 +58,9 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, token,
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/50 backdrop-blur-sm">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh]">
-        
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-gray-900/50 backdrop-blur-sm">
+      <div className="bg-white sm:rounded-xl shadow-xl w-full max-w-3xl overflow-hidden flex flex-col h-full sm:h-auto sm:max-h-[90vh]">
+
         {/* Header */}
         <div className="flex justify-between items-start p-6 border-b border-gray-100">
           <div>
@@ -73,8 +73,8 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, token,
         </div>
 
         {/* Body */}
-        <div className="p-6 overflow-y-auto space-y-8">
-          
+        <div className="p-4 sm:p-6 overflow-y-auto space-y-8 flex-1">
+
           {/* Price Alert Section */}
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div>
@@ -86,8 +86,8 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, token,
               </p>
             </div>
             <div className="flex gap-2 w-full sm:w-auto">
-              <Input 
-                type="number" 
+              <Input
+                type="number"
                 placeholder="e.g. 25.00"
                 value={targetPrice}
                 onChange={(e) => setTargetPrice(e.target.value)}
@@ -109,8 +109,8 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, token,
             ) : currentPrices.length === 0 ? (
               <p className="text-sm text-gray-500">No current prices found nearby.</p>
             ) : (
-              <div className="border border-gray-200 rounded-lg overflow-hidden">
-                <table className="w-full text-sm text-left">
+              <div className="border border-gray-200 rounded-lg overflow-x-auto">
+                <table className="w-full text-sm text-left whitespace-nowrap">
                   <thead className="bg-gray-50 text-gray-600 border-b border-gray-200">
                     <tr>
                       <th className="px-4 py-3 font-medium">Store</th>
@@ -127,7 +127,7 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, token,
                         </td>
                         <td className="px-4 py-3 text-gray-500">
                           <span className="flex items-center gap-1">
-                            <MapPin size={12} /> 
+                            <MapPin size={12} />
                             {p.storeName.includes('Online') ? 'Online' : `${(p.distanceMeters / 1000).toFixed(1)} km`}
                           </span>
                         </td>
@@ -157,16 +157,16 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, token,
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={history} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                    <XAxis dataKey="date" tick={{fontSize: 12, fill: '#6B7280'}} axisLine={false} tickLine={false} />
-                    <YAxis tick={{fontSize: 12, fill: '#6B7280'}} domain={['auto', 'auto']} tickFormatter={(val) => `R${val}`} axisLine={false} tickLine={false} />
+                    <XAxis dataKey="date" tick={{ fontSize: 12, fill: '#6B7280' }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 12, fill: '#6B7280' }} domain={['auto', 'auto']} tickFormatter={(val) => `R${val}`} axisLine={false} tickLine={false} />
                     <Tooltip formatter={(value) => `R${value}`} />
-                    <Legend wrapperStyle={{fontSize: '12px'}} />
+                    <Legend wrapperStyle={{ fontSize: '12px' }} />
                     {Object.keys(history[0] || {}).filter(k => k !== 'date').map((store, i) => (
-                      <Line 
-                        key={store} 
-                        type="monotone" 
-                        dataKey={store} 
-                        stroke={['#047857', '#2563EB', '#DC2626', '#D97706'][i % 4]} 
+                      <Line
+                        key={store}
+                        type="monotone"
+                        dataKey={store}
+                        stroke={['#047857', '#2563EB', '#DC2626', '#D97706'][i % 4]}
                         strokeWidth={2}
                         dot={{ r: 3 }}
                         activeDot={{ r: 5 }}
@@ -180,11 +180,13 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, token,
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-between items-center">
-          <p className="text-sm text-gray-500">Lowest Price: <span className="font-bold text-gray-900">R{product.minEffectivePrice}</span></p>
-          <div className="flex gap-3">
-            <Button variant="secondary" onClick={onClose}>Close</Button>
-            <Button onClick={() => { onAddItem(product.productId); onClose(); }}>
+        <div className="p-4 border-t border-gray-100 bg-gray-50 flex flex-col sm:flex-row justify-between items-center gap-4">
+          <p className="text-sm text-gray-500 w-full text-center sm:text-left">
+            Lowest Price: <span className="font-bold text-gray-900">R{product.minEffectivePrice}</span>
+          </p>
+          <div className="flex gap-3 w-full sm:w-auto">
+            <Button variant="secondary" onClick={onClose} className="flex-1 sm:flex-none">Close</Button>
+            <Button onClick={() => { onAddItem(product.productId); onClose(); }} className="flex-1 sm:flex-none">
               <Plus size={16} className="mr-2" /> Add to List
             </Button>
           </div>

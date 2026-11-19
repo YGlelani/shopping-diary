@@ -16,7 +16,7 @@ export default function Discover({ token, listId, onAddItem, location }) {
   const handleSearch = async (e) => {
     e.preventDefault();
     if (!query.trim()) return;
-    
+
     setLoading(true);
     setHasSearched(true);
     try {
@@ -46,18 +46,18 @@ export default function Discover({ token, listId, onAddItem, location }) {
 
       <Card>
         <CardContent className="p-4">
-          <form onSubmit={handleSearch} className="flex gap-3">
+          <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-3">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-              <Input 
-                type="text" 
-                placeholder="Search for milk, bread, maize..." 
+              <Input
+                type="text"
+                placeholder="Search for milk, bread..."
                 className="pl-10"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
             </div>
-            <Button type="submit" disabled={loading}>
+            <Button type="submit" disabled={loading} className="w-full sm:w-auto">
               {loading ? 'Searching...' : 'Search'}
             </Button>
           </form>
@@ -81,16 +81,16 @@ export default function Discover({ token, listId, onAddItem, location }) {
             <h2 className="text-lg font-bold text-gray-800 mb-4 pb-2 border-b border-gray-200">
               {category}
             </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {products.map(product => (
                 <Card key={product.productId} className="hover:shadow-md transition-shadow cursor-pointer flex flex-col">
-                  
+
                   {/* Product Image / Fallback */}
                   <div className="h-40 w-full bg-gray-50 border-b border-gray-100 flex items-center justify-center overflow-hidden">
                     {product.imageUrl ? (
-                      <img 
-                        src={product.imageUrl} 
-                        alt={product.canonicalName} 
+                      <img
+                        src={product.imageUrl}
+                        alt={product.canonicalName}
                         className="object-contain h-full w-full p-4 hover:scale-105 transition-transform"
                         onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }}
                       />
@@ -105,7 +105,7 @@ export default function Discover({ token, listId, onAddItem, location }) {
                     <div>
                       <h3 className="font-semibold text-gray-900 leading-tight line-clamp-2">{product.canonicalName}</h3>
                       <p className="text-xs text-gray-500 mt-1 mb-3">{product.brand} • {product.sizeText}</p>
-                      
+
                       <div className="flex items-end justify-between">
                         <div>
                           <p className="text-xs text-gray-500 font-medium">Lowest Price</p>
@@ -118,14 +118,14 @@ export default function Discover({ token, listId, onAddItem, location }) {
                     </div>
 
                     <div className="mt-4 pt-4 border-t border-gray-100 flex gap-2">
-                      <Button 
-                        variant="secondary" 
+                      <Button
+                        variant="secondary"
                         className="flex-1 text-xs"
                         onClick={() => setSelectedProduct(product)}
                       >
                         Compare
                       </Button>
-                      <Button 
+                      <Button
                         className="flex-1 text-xs"
                         onClick={(e) => { e.stopPropagation(); onAddItem(product.productId); }}
                       >
@@ -141,10 +141,10 @@ export default function Discover({ token, listId, onAddItem, location }) {
       </div>
 
       {selectedProduct && (
-        <ProductDetailsModal 
-          product={selectedProduct} 
-          onClose={() => setSelectedProduct(null)} 
-          lat={location.lat} 
+        <ProductDetailsModal
+          product={selectedProduct}
+          onClose={() => setSelectedProduct(null)}
+          lat={location.lat}
           lon={location.lon}
           token={token}
           onAddItem={onAddItem}

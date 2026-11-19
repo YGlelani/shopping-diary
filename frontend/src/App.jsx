@@ -8,6 +8,8 @@ import Optimizer from './pages/Optimizer';
 import AppLayout from './components/layout/AppLayout';
 import { apiRequest } from './api/client';
 import Admin from './pages/Admin';
+import PriceAlerts from './pages/PriceAlerts';
+import NearbyStores from './pages/NearbyStores';
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || null);
@@ -85,6 +87,9 @@ export default function App() {
 
           <Route path="/alerts" element={<div className="p-8 text-gray-500">Alerts coming next.</div>} />
           <Route path="/admin" element={<Admin token={token} />} />
+
+          <Route path="/alerts" element={<PriceAlerts token={token} />} />
+          <Route path="/stores" element={<NearbyStores location={location} />} />
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
