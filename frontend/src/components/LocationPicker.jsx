@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -24,10 +24,10 @@ export default function LocationPicker({ onLocationChange, defaultLat, defaultLo
   const [position, setPosition] = useState({ lat: defaultLat, lng: defaultLon });
   const [locating, setLocating] = useState(false);
 
-  // Report position changes to parent
-  useEffect(() => {
-    onLocationChange(position.lat, position.lng);
-  }, [position, onLocationChange]);
+  function selectPosition(nextPosition) {
+    setPosition(nextPosition);
+    onLocationChange(nextPosition.lat, nextPosition.lng);
+  }
 
   const handleGetLocation = () => {
     setLocating(true);
@@ -38,13 +38,14 @@ export default function LocationPicker({ onLocationChange, defaultLat, defaultLo
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setPosition({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        selectPosition({ lat: pos.coords.latitude, lng: pos.coords.longitude });
         setLocating(false);
       },
       () => {
         alert('Unable to retrieve your location. Please click the map to set it manually.');
         setLocating(false);
-      }
+      },
+      { timeout: 10000 }
     );
   };
 
@@ -63,7 +64,7 @@ export default function LocationPicker({ onLocationChange, defaultLat, defaultLo
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           />
-          <LocationMarker position={position} setPosition={setPosition} />
+          <LocationMarker position={position} setPosition={selectPosition} />
         </MapContainer>
       </div>
       <p className="text-xs text-gray-500 text-center">Click the map to adjust your location manually.</p>

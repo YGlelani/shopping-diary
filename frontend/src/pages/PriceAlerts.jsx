@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
-import { Bell, Trash2, ArrowRight } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { Bell, Trash2 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { apiRequest } from '../api/client';
 
 export default function PriceAlerts({ token }) {
+  const navigate = useNavigate();
+  const [error, setError] = useState('');
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -15,13 +17,23 @@ export default function PriceAlerts({ token }) {
         const res = await apiRequest('/alerts', {}, token);
         setAlerts(res);
       } catch (err) {
-        console.error(err);
+        setError(err.message);
       } finally {
         setLoading(false);
       }
     }
     fetchAlerts();
   }, [token]);
+
+  async function deleteAlert(id) {
+    setError('');
+    try {
+      await apiRequest(`/alerts/${id}`, { method: 'DELETE' }, token);
+      setAlerts(current => current.filter(alert => alert.id !== id));
+    } catch (err) {
+      setError(err.message);
+    }
+  }
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -30,10 +42,11 @@ export default function PriceAlerts({ token }) {
         <p className="text-gray-500 mt-1">Manage the products you are monitoring for price drops.</p>
       </div>
 
+      {error && <p role="alert" className="text-red-700">{error}</p>}
       <Card>
         <CardHeader className="bg-gray-50/50">
           <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-            <Bell size={18} /> Active Alerts
+            <Bell size={18} /> Alert Status
           </h2>
         </CardHeader>
         <CardContent className="p-0">
@@ -41,8 +54,8 @@ export default function PriceAlerts({ token }) {
             <div className="p-6 text-center text-gray-500">Loading alerts...</div>
           ) : alerts.length === 0 ? (
             <div className="text-center py-12 px-4">
-              <p className="text-gray-500 mb-4">You don't have any active price alerts.</p>
-              <Button onClick={() => window.location.href='/discover'}>Find Products to Track</Button>
+              <p className="text-gray-500 mb-4">You don't have any price alerts.</p>
+              <Button onClick={() => navigate('/discover')}>Find Products to Track</Button>
             </div>
           ) : (
             <ul className="divide-y divide-gray-100">
@@ -51,14 +64,14 @@ export default function PriceAlerts({ token }) {
                   <div>
                     <p className="font-medium text-gray-900">Product ID: {alert.productId}</p>
                     <p className="text-sm text-gray-500">
-                      Notify me when price drops below <span className="font-bold text-emerald-600">R{alert.targetPrice}</span>
+                      Target price <span className="font-bold text-emerald-600">R{alert.targetPrice}</span>
                     </p>
                   </div>
                   <div className="flex items-center gap-4">
                     <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${alert.active ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-600'}`}>
-                      {alert.active ? 'Watching' : 'Triggered'}
+                      {alert.active ? 'Watching' : alert.lastNotifiedAt ? 'Target reached' : 'Inactive'}
                     </span>
-                    <button className="p-2 text-gray-400 hover:text-red-600 transition-colors" title="Delete alert">
+                    <button className="p-2 text-gray-400 hover:text-red-600 transition-colors" title="Delete alert" onClick={() => deleteAlert(alert.id)}>
                       <Trash2 size={18} />
                     </button>
                   </div>

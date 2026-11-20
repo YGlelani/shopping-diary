@@ -1,5 +1,7 @@
 package za.co.shoppingdiary.list.dto;
 
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
@@ -10,6 +12,7 @@ public class CreateListRequest {
     @NotBlank @Size(max = 200)
     private String name;
 
+    @DecimalMin("0.00") @Digits(integer = 8, fraction = 2)
     private BigDecimal budgetAmount;
 
     public String getName() { return name; }

@@ -1,10 +1,11 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Calculator, CheckCircle2, TrendingDown, MapPin, Store } from 'lucide-react';
-import { Card, CardContent, CardHeader } from '../components/ui/Card';
+import { Card, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { apiRequest } from '../api/client';
 
-export default function Optimizer({ token, listId, location }) {
+export default function Optimizer({ token, listId, location, budgetAmount }) {
   const [optimization, setOptimization] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -35,8 +36,9 @@ export default function Optimizer({ token, listId, location }) {
         <p className="text-gray-500 mb-8">
           We will calculate whether buying everything at one store, or splitting your list between multiple stores, will save you the most money after transport costs.
         </p>
+        {!listId && <Link to="/lists" className="mb-4 text-emerald-700 underline">Create a shopping list</Link>}
         {error && <p className="text-red-600 mb-4">{error}</p>}
-        <Button onClick={handleOptimize} className="w-full py-3 text-lg">Run Optimisation</Button>
+        <Button onClick={handleOptimize} disabled={!listId || !location} className="w-full py-3 text-lg">Run Optimisation</Button>
       </div>
     );
   }
@@ -45,7 +47,8 @@ export default function Optimizer({ token, listId, location }) {
     return <div className="text-center py-20 text-gray-500">Analyzing prices, distances, and promotions...</div>;
   }
 
-  const { recommendation, bestSingleStore, savingsVsBestSingle } = optimization;
+  const { recommendation, bestSingleStore, savingsVsBestSingle, skippedItems, costPerKm } = optimization;
+  const omitted = recommendation.missingItems + skippedItems;
   const isSplit = recommendation.stores.length > 1;
 
   return (
@@ -61,7 +64,7 @@ export default function Optimizer({ token, listId, location }) {
         <div>
           <p className="text-xs sm:text-sm font-semibold text-emerald-800 uppercase tracking-wider mb-1">Recommended Plan</p>
           <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
-            {isSplit ? 'Split across ' + recommendation.stores.length + ' stores' : 'Buy everything at ' + recommendation.stores[0].storeName}
+            {isSplit ? 'Split across ' + recommendation.stores.length + ' stores' : 'Shop at ' + recommendation.stores[0].storeName}
           </h2>
         </div>
         <div className="text-left md:text-right">
@@ -72,7 +75,9 @@ export default function Optimizer({ token, listId, location }) {
 
       <CardContent>
       <div className="p-6">
-        {savingsVsBestSingle > 0 ? (
+        {omitted > 0 && <p role="status" className="mb-4 text-amber-800">{omitted} items are missing from this estimate.</p>}
+        {budgetAmount != null && <p className="mb-4 text-sm">Budget R{budgetAmount.toFixed(2)}: {recommendation.grandTotal > budgetAmount ? "Over budget" : omitted ? "Priced items within budget" : "Within budget"}</p>}
+        {isSplit && bestSingleStore && savingsVsBestSingle > 0 ? (
           <div className="flex items-center gap-3 bg-emerald-100 text-emerald-900 p-4 rounded-lg mb-6">
             <TrendingDown size={24} className="text-emerald-700" />
             <div>
@@ -84,13 +89,13 @@ export default function Optimizer({ token, listId, location }) {
           <div className="flex items-center gap-3 bg-gray-100 text-gray-800 p-4 rounded-lg mb-6">
             <CheckCircle2 size={24} className="text-gray-600" />
             <div>
-              <p className="font-bold">One-stop shop is cheaper.</p>
-              <p className="text-sm text-gray-600">Splitting your list would cost more in transport than you save on groceries.</p>
+              <p className="font-bold">{!bestSingleStore ? 'No comparable one-store plan' : isSplit ? 'Split plan matches the one-store estimate' : 'One-store plan recommended'}</p>
+              <p className="text-sm text-gray-600">{!bestSingleStore ? 'No single store covers as many items as this plan.' : 'The comparison includes estimated transport.'}</p>
             </div>
           </div>
         )}
 
-        <h3 className="font-semibold text-gray-900 mb-4">Your Shopping Route</h3>
+        <h3 className="font-semibold text-gray-900 mb-4">Stores and Items</h3>
         <div className="space-y-4">
           {recommendation.stores.map((store) => {
             const storeItems = recommendation.items.filter(i => i.assignedStoreId === store.storeId);
@@ -126,7 +131,7 @@ export default function Optimizer({ token, listId, location }) {
             <span>R{recommendation.totalProductCost.toFixed(2)}</span>
           </div>
           <div className="flex justify-between text-gray-600">
-            <span>Estimated Transport (R4.50/km)</span>
+            <span>Estimated transport (R{costPerKm.toFixed(2)}/km)</span>
             <span>R{recommendation.totalTransportCost.toFixed(2)}</span>
           </div>
           <div className="flex justify-between font-bold text-gray-900 text-base pt-2">

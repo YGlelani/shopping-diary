@@ -59,8 +59,8 @@ app:
 
 loyaltyhub:
   api:
-    key: ${LOYALTYHUB_API_KEY:lh_live_25a86d6f1c62c76acdf487bc3685c558da10abb0d571be35}
+    key: ${LOYALTYHUB_API_KEY:}
 
 reefapi:
   api:
-    key: ${REEFAPI_KEY:ak_live_tFceiuBq3ICX63kqR9jOczn3viLcWFzy}
+    key: ${REEFAPI_KEY:}

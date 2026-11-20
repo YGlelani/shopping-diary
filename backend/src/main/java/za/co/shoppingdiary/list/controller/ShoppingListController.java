@@ -47,6 +47,13 @@ public class ShoppingListController {
         return service.addItem(me.getId(), id, req);
     }
 
+    @PostMapping("/{id}/items/{itemId}/increment")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void incrementItem(@AuthenticationPrincipal UserPrincipal me,
+                              @PathVariable Long id, @PathVariable Long itemId) {
+        service.incrementItem(me.getId(), id, itemId);
+    }
+
     @DeleteMapping("/{id}/items/{itemId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void removeItem(@AuthenticationPrincipal UserPrincipal me,

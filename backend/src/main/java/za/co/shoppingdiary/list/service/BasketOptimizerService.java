@@ -18,7 +18,6 @@ import java.util.*;
 @RequiredArgsConstructor
 public class BasketOptimizerService {
 
-    private static final int MAX_CANDIDATE_STORES = 7;
     private static final int MAX_SPLIT_STORES = 3;
 
     private final ShoppingListRepository lists;
@@ -67,12 +66,17 @@ public class BasketOptimizerService {
                        po.shelf_price, po.promo_price,
                        po.observed_at
                 FROM price_observations po
-                ORDER BY po.product_id, po.store_id, po.observed_at DESC
+                JOIN nearby_stores ns ON ns.id = po.store_id
+                WHERE po.product_id IN (
+                    SELECT product_id FROM shopping_list_items WHERE list_id = :listId
+                )
+                ORDER BY po.product_id, po.store_id, po.observed_at DESC, po.id DESC
             ),
             active_promos AS (
-                SELECT pr.product_id, pr.store_id, pr.promo_price, pr.min_quantity
+                SELECT pr.product_id, pr.store_id, pr.promo_price, CASE WHEN pr.promo_type = 'DISCOUNT' THEN 1 ELSE pr.min_quantity END AS min_quantity
                 FROM promotions pr
-                WHERE pr.status = 'ACTIVE' AND CURRENT_DATE BETWEEN pr.start_date AND pr.end_date
+                WHERE pr.status = 'ACTIVE' AND pr.promo_type IN ('MULTIBUY', 'DISCOUNT')
+                  AND CURRENT_DATE BETWEEN pr.start_date AND pr.end_date
             )
             SELECT ns.id AS store_id, ns.name AS store_name,
                    ns.retailer_name, ns.distance_km,
@@ -128,7 +132,7 @@ public class BasketOptimizerService {
                 // Attach the full price data (including promos) to the store
                 BigDecimal shelf = rs.getBigDecimal("shelf_price");
                 if (shelf != null) {
-                    store.pricesByProduct.put(item.productId, new PriceData(
+                    store.pricesByProduct.computeIfAbsent(item.productId, ignored -> new ArrayList<>()).add(new PriceData(
                         shelf,
                         rs.getBigDecimal("regular_promo"),
                         rs.getBigDecimal("multi_buy_promo"),
@@ -139,55 +143,24 @@ public class BasketOptimizerService {
             return null;
         });
 
-        // 4. Filter to stores with at least one price, then rank and cap at 7
         List<StoreCandidate> candidates = storesById.values().stream()
-                .filter(s -> !s.pricesByProduct.isEmpty())
-                .sorted((a, b) -> {
-                    int covA = a.pricesByProduct.size();
-                    int covB = b.pricesByProduct.size();
-                    if (covA != covB) return Integer.compare(covB, covA);
-                    return Double.compare(a.distanceKm, b.distanceKm);
-                })
-                .limit(MAX_CANDIDATE_STORES)
+                .filter(store -> !store.pricesByProduct.isEmpty())
+                .sorted(Comparator.comparingLong(store -> store.id))
                 .toList();
-
         if (candidates.isEmpty()) {
             throw new IllegalArgumentException("No stores with prices for these items within " + safeRadiusKm + " km");
         }
 
-        // 5. Enumerate subsets of size 1..MAX_SPLIT_STORES
-        List<OptimizationPlan> allPlans = new ArrayList<>();
-        int n = candidates.size();
-        for (int mask = 1; mask < (1 << n); mask++) {
-            int bitCount = Integer.bitCount(mask);
-            if (bitCount > MAX_SPLIT_STORES) continue;
-            List<StoreCandidate> subset = new ArrayList<>(bitCount);
-            for (int i = 0; i < n; i++) {
-                if ((mask & (1 << i)) != 0) subset.add(candidates.get(i));
-            }
-            allPlans.add(buildPlan(subset, itemsById.values(), safeCostPerKm));
-        }
-
-        // 6. Filter to plans with best coverage, then rank by grand total
-        int minMissing = allPlans.stream().mapToInt(OptimizationPlan::getMissingItems).min().orElse(0);
-        List<OptimizationPlan> eligible = allPlans.stream()
-                .filter(p -> p.getMissingItems() == minMissing)
-                .filter(p -> !p.getStores().isEmpty())
-                .toList();
-
-        if (eligible.isEmpty()) {
-            throw new IllegalArgumentException("Could not generate any valid shopping plans for these items.");
-        }
-
-        Comparator<OptimizationPlan> byTotal = Comparator.comparing(OptimizationPlan::getGrandTotal);
-
-        OptimizationPlan recommendation = eligible.stream().min(byTotal).orElseThrow();
-        OptimizationPlan best1 = eligible.stream()
-                .filter(p -> p.getStores().size() == 1).min(byTotal).orElse(null);
-        OptimizationPlan best2 = eligible.stream()
-                .filter(p -> p.getStores().size() == 2).min(byTotal).orElse(null);
-        OptimizationPlan best3 = eligible.stream()
-                .filter(p -> p.getStores().size() == 3).min(byTotal).orElse(null);
+        Comparator<OptimizationPlan> rank = Comparator.comparingInt(OptimizationPlan::getMissingItems)
+                .thenComparing(OptimizationPlan::getGrandTotal)
+                .thenComparingInt(plan -> plan.getStores().size());
+        Map<Integer, OptimizationPlan> best = new HashMap<>();
+        evaluateSubsets(candidates, 0, new ArrayList<>(), itemsById.values(), safeCostPerKm, best, rank);
+        OptimizationPlan recommendation = best.values().stream().min(rank).orElseThrow();
+        best.values().removeIf(plan -> plan.getMissingItems() != recommendation.getMissingItems());
+        OptimizationPlan best1 = best.get(1);
+        OptimizationPlan best2 = best.get(2);
+        OptimizationPlan best3 = best.get(3);
 
         // 7. Savings vs single-store baseline
         BigDecimal savings = BigDecimal.ZERO;
@@ -204,68 +177,61 @@ public class BasketOptimizerService {
                 pricedItems.size(), skipped);
     }
 
+    private void evaluateSubsets(List<StoreCandidate> candidates, int start, List<StoreCandidate> subset,
+                                 Collection<ItemCandidate> items, BigDecimal costPerKm,
+                                 Map<Integer, OptimizationPlan> best, Comparator<OptimizationPlan> rank) {
+        for (int i = start; i < candidates.size(); i++) {
+            subset.add(candidates.get(i));
+            OptimizationPlan plan = buildPlan(subset, items, costPerKm);
+            best.merge(plan.getStores().size(), plan,
+                    (previous, current) -> rank.compare(previous, current) <= 0 ? previous : current);
+            if (subset.size() < MAX_SPLIT_STORES) {
+                evaluateSubsets(candidates, i + 1, subset, items, costPerKm, best, rank);
+            }
+            subset.remove(subset.size() - 1);
+        }
+    }
+
+    static BigDecimal lineCost(PriceData price, BigDecimal quantity) {
+        BigDecimal unitPrice = price.regularPromo() == null
+                ? price.shelfPrice() : price.shelfPrice().min(price.regularPromo());
+        BigDecimal cost = unitPrice.multiply(quantity);
+        if (price.multiBuyPromo() != null && price.minQuantity() != null && price.minQuantity() > 0) {
+            BigDecimal[] bundle = quantity.divideAndRemainder(BigDecimal.valueOf(price.minQuantity()));
+            cost = cost.min(price.multiBuyPromo().multiply(bundle[0]).add(unitPrice.multiply(bundle[1])));
+        }
+        return cost.setScale(2, RoundingMode.HALF_UP);
+    }
+
     private OptimizationPlan buildPlan(List<StoreCandidate> subset,
                                        Collection<ItemCandidate> allItems,
                                        BigDecimal costPerKm) {
         Map<Long, Long> itemToStore = new HashMap<>();
-        Map<Long, BigDecimal> itemToPrice = new HashMap<>();
+        Map<Long, BigDecimal> itemToTotal = new HashMap<>();
         BigDecimal productCost = BigDecimal.ZERO;
         int missing = 0;
 
         // Assign each item to cheapest store in subset
         for (ItemCandidate item : allItems) {
             Long bestStore = null;
-            BigDecimal bestEffectiveUnitPrice = null;
             BigDecimal bestTotalCost = null;
 
             for (StoreCandidate store : subset) {
-                PriceData priceData = store.pricesByProduct.get(item.productId);
-                if (priceData == null || priceData.shelfPrice() == null) continue;
-
-                BigDecimal effectiveUnitPrice = priceData.shelfPrice();
-                
-                // 1. Apply regular discount (e.g. 20% off)
-                if (priceData.regularPromo() != null && priceData.regularPromo().compareTo(effectiveUnitPrice) < 0) {
-                    effectiveUnitPrice = priceData.regularPromo();
-                }
-
-                // 2. Apply multi-buy promo (e.g. Buy 2 for R50)
-                if (priceData.multiBuyPromo() != null && priceData.minQuantity() != null && priceData.minQuantity() > 0) {
-                    int intQty = item.quantity.intValue();
-                    
-                    if (intQty >= priceData.minQuantity()) {
-                        int bundles = intQty / priceData.minQuantity();
-                        int remainder = intQty % priceData.minQuantity();
-                        
-                        BigDecimal bundleCost = priceData.multiBuyPromo().multiply(new BigDecimal(bundles));
-                        BigDecimal remainderCost = priceData.shelfPrice().multiply(new BigDecimal(remainder));
-                        BigDecimal totalCostForBundles = bundleCost.add(remainderCost);
-                        
-                        // Calculate the effective unit price for sorting
-                        BigDecimal multiBuyUnitPrice = totalCostForBundles.divide(item.quantity, 2, RoundingMode.HALF_UP);
-                        
-                        if (multiBuyUnitPrice.compareTo(effectiveUnitPrice) < 0) {
-                            effectiveUnitPrice = multiBuyUnitPrice;
-                        }
-                    }
-                }
-
-                BigDecimal totalCost = effectiveUnitPrice.multiply(item.quantity);
-
-                // Check if this store provides the lowest total cost for this item
+                List<PriceData> prices = store.pricesByProduct.get(item.productId);
+                if (prices == null) continue;
+                BigDecimal totalCost = prices.stream().map(price -> lineCost(price, item.quantity))
+                        .min(BigDecimal::compareTo).orElseThrow();
                 if (bestTotalCost == null || totalCost.compareTo(bestTotalCost) < 0) {
                     bestTotalCost = totalCost;
-                    bestEffectiveUnitPrice = effectiveUnitPrice;
                     bestStore = store.id;
                 }
             }
-
             if (bestStore == null) {
                 missing++;
             } else {
                 itemToStore.put(item.itemId, bestStore);
-                itemToPrice.put(item.itemId, bestEffectiveUnitPrice);
-                productCost = productCost.add(bestEffectiveUnitPrice.multiply(item.quantity));
+                itemToTotal.put(item.itemId, bestTotalCost);
+                productCost = productCost.add(bestTotalCost);
             }
         }
 
@@ -274,7 +240,7 @@ public class BasketOptimizerService {
         for (ItemCandidate item : allItems) {
             Long storeId = itemToStore.get(item.itemId);
             if (storeId != null) {
-                BigDecimal line = item.quantity.multiply(itemToPrice.get(item.itemId));
+                BigDecimal line = itemToTotal.get(item.itemId);
                 subtotals.merge(storeId, line, BigDecimal::add);
             }
         }
@@ -303,11 +269,12 @@ public class BasketOptimizerService {
         for (ItemCandidate item : allItems) {
             Long storeId = itemToStore.get(item.itemId);
             if (storeId == null) continue;
-            BigDecimal price = itemToPrice.get(item.itemId);
+            BigDecimal total = itemToTotal.get(item.itemId);
+            BigDecimal price = total.divide(item.quantity, 2, RoundingMode.HALF_UP);
             planItems.add(new PlanItem(
                     item.productId, item.productName, item.quantity,
                     storeId, storeNames.get(storeId),
-                    price, item.quantity.multiply(price)));
+                    price, total));
         }
 
         BigDecimal grand = productCost.add(transportTotal);
@@ -324,7 +291,7 @@ public class BasketOptimizerService {
         String name;
         String retailerName;
         double distanceKm;
-        Map<Long, PriceData> pricesByProduct;
+        Map<Long, List<PriceData>> pricesByProduct;
     }
 
     static class ItemCandidate {

@@ -18,7 +18,7 @@ export async function apiRequest(endpoint, options = {}, token = null) {
   if (text) {
     try {
       data = JSON.parse(text);
-    } catch (e) {
+    } catch {
       // It's just plain text, leave it as is
     }
   }

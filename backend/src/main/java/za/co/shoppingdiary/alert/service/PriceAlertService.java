@@ -10,7 +10,6 @@ import za.co.shoppingdiary.alert.dto.CreateAlertRequest;
 import za.co.shoppingdiary.alert.entity.PriceAlert;
 import za.co.shoppingdiary.alert.repository.PriceAlertRepository;
 
-import java.math.BigDecimal;
 import java.util.List;
 
 @Slf4j
@@ -33,32 +32,40 @@ public class PriceAlertService {
 
         alert.setTargetPrice(req.getTargetPrice());
         alert.setActive(true);
+        alert.setLastNotifiedAt(null);
         alerts.save(alert);
     }
 
     public List<PriceAlert> getUserAlerts(Long userId) {
-        return alerts.findByUserIdAndActiveTrue(userId);
+        return alerts.findByUserIdOrderByCreatedAtDesc(userId);
     }
 
-    @Scheduled(cron = "0 0 8 * * *") // Runs daily at 8 AM
+    @Transactional
+    public void deleteAlert(Long userId, Long alertId) {
+        alerts.deleteByIdAndUserId(alertId, userId);
+    }
+
+    @Scheduled(cron = "0 0 8 * * *", zone = "Africa/Johannesburg")
     public void checkAlerts() {
-        log.info("Starting daily price alert check...");
-        List<PriceAlert> activeAlerts = alerts.findAll().stream().filter(PriceAlert::isActive).toList();
-
-        for (PriceAlert alert : activeAlerts) {
-            BigDecimal cheapestPrice = jdbc.queryForObject("""
-                SELECT MIN(COALESCE(promo_price, shelf_price))
-                FROM price_observations
-                WHERE product_id = ?
-                """, BigDecimal.class, alert.getProductId());
-
-            if (cheapestPrice != null && cheapestPrice.compareTo(alert.getTargetPrice()) <= 0) {
-                log.info("🚨 ALERT TRIGGERED for User {}: Product {} is now R{} (Target was R{})",
-                        alert.getUserId(), alert.getProductId(), cheapestPrice, alert.getTargetPrice());
-                
-                alert.setActive(false);
-                alerts.save(alert);
-            }
-        }
+        int triggered = jdbc.update("""
+            WITH latest_prices AS (
+                SELECT DISTINCT ON (po.product_id, po.store_id)
+                       po.product_id, LEAST(po.promo_price, po.shelf_price) AS price
+                FROM price_observations po
+                JOIN stores s ON s.id = po.store_id AND s.active
+                WHERE po.observed_at >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+                  AND EXISTS (
+                      SELECT 1 FROM price_alerts a WHERE a.active AND a.product_id = po.product_id
+                  )
+                ORDER BY po.product_id, po.store_id, po.observed_at DESC, po.id DESC
+            ), cheapest AS (
+                SELECT product_id, MIN(price) AS price FROM latest_prices GROUP BY product_id
+            )
+            UPDATE price_alerts a
+            SET active = false, last_notified_at = CURRENT_TIMESTAMP
+            FROM cheapest c
+            WHERE a.active AND a.product_id = c.product_id AND c.price <= a.target_price
+            """);
+        log.info("Triggered {} in-app price alerts", triggered);
     }
 }

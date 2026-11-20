@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { 
   LayoutDashboard, Search, List, Calculator, 
-  Bell, History, Store, LogOut, Settings, Menu, X 
+  Bell, Store, LogOut, Settings, Menu, X
 } from 'lucide-react';
 
 export default function AppLayout({ children, user, onLogout }) {

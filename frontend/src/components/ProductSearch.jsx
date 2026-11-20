@@ -3,7 +3,7 @@ import { Search, Plus } from 'lucide-react'; // <-- Import icons
 import { apiRequest } from '../api/client';
 
 // Add onViewDetails prop
-export default function ProductSearch({ token, onAddProduct, lat, lon, onViewDetails }) {
+export default function ProductSearch({ onAddProduct, lat, lon, onViewDetails }) {
   const [query, setQuery] = useState('milk');
   const [results, setResults] = useState([]);
 

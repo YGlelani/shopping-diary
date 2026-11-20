@@ -25,6 +25,12 @@ public class PriceAlertController {
         service.createOrUpdateAlert(me.getId(), req);
     }
 
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteAlert(@AuthenticationPrincipal UserPrincipal me, @PathVariable Long id) {
+        service.deleteAlert(me.getId(), id);
+    }
+
     @GetMapping
     public List<PriceAlert> getMyAlerts(@AuthenticationPrincipal UserPrincipal me) {
         return service.getUserAlerts(me.getId());

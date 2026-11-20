@@ -1,12 +1,12 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { Search, Plus, MapPin, Package } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { apiRequest } from '../api/client';
-import ProductDetailsModal from '../components/ProductDetailsModal';
+const ProductDetailsModal = lazy(() => import('../components/ProductDetailsModal'));
 
-export default function Discover({ token, listId, onAddItem, location }) {
+export default function Discover({ token, onAddItem, location }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -20,7 +20,7 @@ export default function Discover({ token, listId, onAddItem, location }) {
     setLoading(true);
     setHasSearched(true);
     try {
-      const res = await apiRequest(`/products/search?q=${query}&lat=${location.lat}&lon=${location.lon}&r=15`);
+      const res = await apiRequest(`/products/search?q=${encodeURIComponent(query)}&lat=${location.lat}&lon=${location.lon}&r=15`);
       setResults(res);
     } catch (err) {
       alert(err.message);
@@ -63,7 +63,7 @@ export default function Discover({ token, listId, onAddItem, location }) {
           </form>
           <div className="flex items-center gap-2 mt-3 text-xs text-gray-500">
             <MapPin size={14} />
-            Searching near current location (Cape Town)
+            Searching near your selected location
           </div>
         </CardContent>
       </Card>
@@ -141,14 +141,16 @@ export default function Discover({ token, listId, onAddItem, location }) {
       </div>
 
       {selectedProduct && (
-        <ProductDetailsModal
-          product={selectedProduct}
-          onClose={() => setSelectedProduct(null)}
-          lat={location.lat}
-          lon={location.lon}
-          token={token}
-          onAddItem={onAddItem}
-        />
+        <Suspense fallback={<p>Loading product details...</p>}>
+          <ProductDetailsModal
+            product={selectedProduct}
+            onClose={() => setSelectedProduct(null)}
+            lat={location.lat}
+            lon={location.lon}
+            token={token}
+            onAddItem={onAddItem}
+          />
+        </Suspense>
       )}
     </div>
   );

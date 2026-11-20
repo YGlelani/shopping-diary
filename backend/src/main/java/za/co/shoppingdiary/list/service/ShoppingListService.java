@@ -63,6 +63,17 @@ public class ShoppingListService {
     }
 
     @Transactional
+    public void incrementItem(Long userId, Long listId, Long itemId) {
+        ownedList(userId, listId);
+        int updated = jdbc.update("""
+            UPDATE shopping_list_items
+            SET quantity = quantity + 1
+            WHERE list_id = :listId AND id = :itemId
+            """, new MapSqlParameterSource().addValue("listId", listId).addValue("itemId", itemId));
+        if (updated == 0) throw new IllegalArgumentException("Item not found in this list");
+    }
+
+    @Transactional
     public void removeItem(Long userId, Long listId, Long itemId) {
         ownedList(userId, listId);
         ShoppingListItem item = items.findByIdAndListId(itemId, listId)

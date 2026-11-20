@@ -31,6 +31,9 @@ public class LoyaltyHubService {
     private String apiKey;
 
     public void syncSearchResults(String searchQuery) {
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new IllegalStateException("Set LOYALTYHUB_API_KEY before syncing LoyaltyHub prices.");
+        }
         log.info("Starting LoyaltyHub sync for query: {}", searchQuery);
 
         // Request up to 50 items if on a paid plan, or 10 if on the free tier.

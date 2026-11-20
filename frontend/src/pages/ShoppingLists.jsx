@@ -1,9 +1,30 @@
+import { useState } from 'react';
 import { Trash2, ShoppingBag, ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 
-export default function ShoppingLists({ cart, onRemoveItem }) {
+export default function ShoppingLists({ cart, lists, listId, onSelect, onCreate, onRemoveItem }) {
+  const [error, setError] = useState('');
+  const [creating, setCreating] = useState(false);
+
+  async function handleCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const budget = values.get('budget');
+    setCreating(true);
+    setError('');
+    try {
+      await onCreate(values.get('name'), budget === '' ? null : Number(budget));
+      form.reset();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCreating(false);
+    }
+  }
+
   const navigate = useNavigate();
   const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -13,6 +34,21 @@ export default function ShoppingLists({ cart, onRemoveItem }) {
         <h1 className="text-2xl font-bold text-gray-900">My Shopping List</h1>
         <p className="text-gray-500 mt-1">Review your items before finding the cheapest plan.</p>
       </div>
+
+      {lists.length > 0 && (
+        <label className="block">
+          Active list
+          <select className="ml-3 rounded border p-2" value={listId ?? ''} onChange={event => onSelect(Number(event.target.value))}>
+            {lists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}
+          </select>
+        </label>
+      )}
+      <form onSubmit={handleCreate} className="flex flex-wrap gap-3">
+        <input className="rounded border p-2" name="name" aria-label="List name" placeholder="List name" required />
+        <input className="rounded border p-2" name="budget" aria-label="Budget in rand" placeholder="Budget in rand" type="number" min="0" step="0.01" />
+        <Button type="submit" disabled={creating}>Create list</Button>
+      </form>
+      {error && <p role="alert" className="text-red-700">{error}</p>}
 
       <Card>
         <CardHeader className="flex justify-between items-center bg-gray-50/50">

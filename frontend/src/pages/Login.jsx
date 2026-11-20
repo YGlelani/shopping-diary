@@ -5,8 +5,8 @@ import { Input } from '../components/ui/Input';
 
 export default function Login({ onLogin }) {
   const [isRegister, setIsRegister] = useState(false);
-  const [email, setEmail] = useState('tester@example.com');
-  const [password, setPassword] = useState('TestPass123!');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -17,7 +17,7 @@ export default function Login({ onLogin }) {
     try {
       const endpoint = isRegister ? '/auth/register' : '/auth/login';
       const body = isRegister 
-        ? { email, password, displayName: 'Test User' } 
+        ? { email, password, displayName: email.split('@')[0] }
         : { email, password };
         
       const data = await apiRequest(endpoint, { method: 'POST', body: JSON.stringify(body) });
