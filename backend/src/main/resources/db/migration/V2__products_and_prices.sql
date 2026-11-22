@@ -1,3 +1,4 @@
+
 CREATE TABLE categories (
     id        BIGSERIAL PRIMARY KEY,
     parent_id BIGINT REFERENCES categories(id) ON DELETE SET NULL,

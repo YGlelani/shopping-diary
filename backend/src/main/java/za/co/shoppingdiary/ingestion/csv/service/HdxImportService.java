@@ -1,9 +1,8 @@
+
 package za.co.shoppingdiary.ingestion.csv.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import za.co.shoppingdiary.ingestion.csv.dto.ImportResult;
-
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
@@ -12,6 +11,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import za.co.shoppingdiary.ingestion.csv.dto.ImportResult;
 
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -19,8 +19,10 @@ import java.io.Reader;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.sql.Timestamp;
 import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
@@ -32,153 +34,390 @@ public class HdxImportService {
 
     private final JdbcTemplate jdbc;
 
-    /**
-     * Entry point for automated downloads (Resource)
-     */
     @Transactional
-    public ImportResult importFromResource(Resource resource) {
-        try (InputStream inputStream = resource.getInputStream()) {
-            return parseAndImport(inputStream);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to process HDX resource", e);
+    public ImportResult importFromResource(
+            Resource resource
+    ) {
+        if (resource == null) {
+            throw new IllegalArgumentException(
+                    "HDX resource is required"
+            );
+        }
+
+        try (InputStream stream =
+                     resource.getInputStream()) {
+
+            return parseAndImport(stream);
+
+        } catch (Exception ex) {
+            throw new IllegalStateException(
+                    "Unable to import HDX resource",
+                    ex
+            );
         }
     }
 
-    /**
-     * Entry point for manual Swagger/UI uploads (MultipartFile)
-     */
     @Transactional
-    public ImportResult importHdxCsv(MultipartFile file) {
-        try (InputStream inputStream = file.getInputStream()) {
-            return parseAndImport(inputStream);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to read uploaded HDX CSV: " + e.getMessage(), e);
+    public ImportResult importHdxCsv(
+            MultipartFile file
+    ) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "CSV file cannot be empty"
+            );
+        }
+
+        try (InputStream stream =
+                     file.getInputStream()) {
+
+            return parseAndImport(stream);
+
+        } catch (Exception ex) {
+            throw new IllegalStateException(
+                    "Unable to import HDX CSV",
+                    ex
+            );
         }
     }
 
-    /**
-     * The shared core logic for parsing the HDX CSV
-     */
-    private ImportResult parseAndImport(InputStream inputStream) {
+    private ImportResult parseAndImport(
+            InputStream stream
+    ) {
         int imported = 0;
         int skipped = 0;
-        List<ImportResult.RowError> errors = new ArrayList<>();
 
-        // Ensure the WFP retailer exists
+        List<ImportResult.RowError> errors =
+                new ArrayList<>();
+
         Long retailerId = getOrCreateWfpRetailer();
 
-        try (Reader reader = new InputStreamReader(inputStream, StandardCharsets.UTF_8);
-                CSVParser parser = CSVFormat.DEFAULT.builder()
-                        .setHeader()
-                        .setSkipHeaderRecord(true)
-                        .setIgnoreSurroundingSpaces(true)
-                        .setTrim(true)
-                        .build()
-                        .parse(reader)) {
+        try (
+            Reader reader = new InputStreamReader(
+                    stream,
+                    StandardCharsets.UTF_8
+            );
 
+            CSVParser parser =
+                    CSVFormat.DEFAULT.builder()
+                            .setHeader()
+                            .setSkipHeaderRecord(true)
+                            .setIgnoreSurroundingSpaces(true)
+                            .setTrim(true)
+                            .build()
+                            .parse(reader)
+        ) {
             for (CSVRecord row : parser) {
-                long rowNumber = row.getRecordNumber();
+
                 try {
-                    String dateStr = get(row, "date");
-                    String market = get(row, "admin1"); // WFP CSV often uses admin1 or market
-                    if (market == null)
-                        market = get(row, "market"); // fallback
+                    String dateText = get(row, "date");
 
-                    String commodity = get(row, "commodity");
-                    String priceStr = get(row, "price");
-                    String currency = get(row, "currency");
+                    String market = get(row, "market");
 
-                    if (dateStr == null || market == null || commodity == null || priceStr == null) {
+                    if (market == null) {
+                        market = get(row, "admin1");
+                    }
+
+                    String commodity =
+                            get(row, "commodity");
+
+                    String priceText =
+                            get(row, "price");
+
+                    String currency =
+                            get(row, "currency");
+
+                    if (dateText == null
+                            || market == null
+                            || commodity == null
+                            || priceText == null) {
+
                         skipped++;
                         continue;
                     }
 
-                    // Only import ZAR prices
-                    if (currency != null && !currency.equalsIgnoreCase("ZAR")) {
+                    if (currency != null
+                            && !currency.equalsIgnoreCase(
+                                    "ZAR"
+                            )) {
+
                         skipped++;
                         continue;
                     }
 
-                    LocalDate date = LocalDate.parse(dateStr, DateTimeFormatter.ISO_LOCAL_DATE);
-                    BigDecimal price = new BigDecimal(priceStr);
+                    LocalDate date =
+                            LocalDate.parse(dateText);
 
-                    Long storeId = getOrCreateHistoricalStore(retailerId, market);
-                    Long productId = getOrCreateHistoricalProduct(commodity);
+                    if (date.isAfter(LocalDate.now())) {
+                        skipped++;
+                        continue;
+                    }
 
-                    String hash = sha256(productId + "|" + storeId + "|" + price + "|" + date);
+                    BigDecimal price =
+                            new BigDecimal(priceText);
+
+                    if (price.signum() <= 0) {
+                        skipped++;
+                        continue;
+                    }
+
+                    Long storeId =
+                            getOrCreateHistoricalStore(
+                                    retailerId,
+                                    market
+                            );
+
+                    Long productId =
+                            getOrCreateHistoricalProduct(
+                                    commodity
+                            );
+
+                    String hash = sha256(
+                            productId + "|" +
+                            storeId + "|" +
+                            price + "|" +
+                            date
+                    );
+
+                    Timestamp observedAt =
+                            Timestamp.from(
+                                    date.atStartOfDay()
+                                            .toInstant(
+                                                    ZoneOffset.UTC
+                                            )
+                            );
 
                     int rows = jdbc.update(
                             """
-                                    INSERT INTO price_observations
-                                    (product_id, store_id, source_type, source_reference, observed_at, shelf_price, stock_status, verification_status, content_hash)
-                                    VALUES (?, ?, 'CSV', 'WFP-Historical', ?, ?, 'IN_STOCK', 'VERIFIED', ?)
-                                    ON CONFLICT (content_hash) DO NOTHING
-                                    """,
-                            productId, storeId, java.sql.Timestamp.valueOf(date.atStartOfDay()), price, hash);
+                            INSERT INTO price_observations (
+                                product_id,
+                                store_id,
+                                source_type,
+                                source_reference,
+                                observed_at,
+                                shelf_price,
+                                stock_status,
+                                verification_status,
+                                content_hash
+                            )
+                            VALUES (
+                                ?, ?,
+                                'CSV',
+                                'WFP-Historical',
+                                ?,
+                                ?,
+                                'UNKNOWN',
+                                'UNVERIFIED',
+                                ?
+                            )
+                            ON CONFLICT (content_hash)
+                            DO NOTHING
+                            """,
+                            productId,
+                            storeId,
+                            observedAt,
+                            price,
+                            hash
+                    );
 
-                    if (rows > 0)
+                    if (rows > 0) {
                         imported++;
-                    else
+                    } else {
                         skipped++;
+                    }
 
                 } catch (Exception ex) {
-                    errors.add(new ImportResult.RowError(rowNumber, ex.getMessage()));
+                    errors.add(
+                            new ImportResult.RowError(
+                                    row.getRecordNumber(),
+                                    ex.getMessage()
+                            )
+                    );
                 }
             }
+
         } catch (Exception ex) {
-            throw new RuntimeException("Failed to read HDX CSV data: " + ex.getMessage(), ex);
+            throw new IllegalStateException(
+                    "Unable to parse HDX CSV",
+                    ex
+            );
         }
 
-        return new ImportResult(imported, skipped, errors);
+        return new ImportResult(
+                imported,
+                skipped,
+                errors
+        );
     }
 
-    private String get(CSVRecord row, String column) {
-        if (!row.isMapped(column))
+    private String get(
+            CSVRecord row,
+            String column
+    ) {
+        if (!row.isMapped(column)) {
             return null;
-        String val = row.get(column);
-        return (val == null || val.isBlank()) ? null : val.trim();
+        }
+
+        String value = row.get(column);
+
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+
+        return value.trim();
     }
 
     private Long getOrCreateWfpRetailer() {
-        List<Long> ids = jdbc.queryForList("SELECT id FROM retailers WHERE slug = 'wfp'", Long.class);
-        if (!ids.isEmpty())
-            return ids.get(0);
-        jdbc.update("INSERT INTO retailers (name, slug) VALUES ('WFP Historical', 'wfp')");
-        return jdbc.queryForObject("SELECT id FROM retailers WHERE slug = 'wfp'", Long.class);
+        return jdbc.queryForObject(
+                """
+                INSERT INTO retailers (
+                    name,
+                    slug,
+                    active
+                )
+                VALUES (
+                    'WFP Historical',
+                    'wfp',
+                    FALSE
+                )
+                ON CONFLICT (slug)
+                DO UPDATE SET active = FALSE
+                RETURNING id
+                """,
+                Long.class
+        );
     }
 
-    private Long getOrCreateHistoricalStore(Long retailerId, String marketName) {
-        List<Long> ids = jdbc.queryForList(
-                "SELECT id FROM stores WHERE retailer_id = ? AND name = ?",
-                Long.class, retailerId, marketName);
-        if (!ids.isEmpty())
-            return ids.get(0);
+    private Long getOrCreateHistoricalStore(
+            Long retailerId,
+            String marketName
+    ) {
+        List<Long> existing =
+                jdbc.queryForList(
+                        """
+                        SELECT id
+                        FROM stores
+                        WHERE retailer_id = ?
+                          AND name = ?
+                        ORDER BY id
+                        LIMIT 1
+                        """,
+                        Long.class,
+                        retailerId,
+                        marketName
+                );
 
-        jdbc.update("""
-                INSERT INTO stores (retailer_id, name, store_code, location, city, store_type)
-                VALUES (?, ?, ?, ST_SetSRID(ST_MakePoint(24.0, -29.0), 4326), ?, 'SUPERMARKET')
-                """, retailerId, marketName, "WFP-" + marketName.replace(" ", "-"), marketName);
+        if (!existing.isEmpty()) {
+            jdbc.update(
+                    """
+                    UPDATE stores
+                    SET active = FALSE
+                    WHERE id = ?
+                    """,
+                    existing.get(0)
+            );
 
-        return jdbc.queryForObject("SELECT id FROM stores WHERE retailer_id = ? AND name = ?", Long.class, retailerId,
-                marketName);
+            return existing.get(0);
+        }
+
+        String storeCode =
+                "WFP-" + sha256(
+                        marketName
+                ).substring(0, 20);
+
+        // Schema requires a point, but historical
+        // data does not establish a real shop address.
+        // Keep this record inactive.
+        return jdbc.queryForObject(
+                """
+                INSERT INTO stores (
+                    retailer_id,
+                    name,
+                    store_code,
+                    location,
+                    city,
+                    store_type,
+                    active
+                )
+                VALUES (
+                    ?, ?, ?,
+                    ST_SetSRID(
+                        ST_MakePoint(0, 0),
+                        4326
+                    ),
+                    ?,
+                    'INDEPENDENT',
+                    FALSE
+                )
+                ON CONFLICT (
+                    retailer_id,
+                    store_code
+                )
+                DO UPDATE SET active = FALSE
+                RETURNING id
+                """,
+                Long.class,
+                retailerId,
+                marketName,
+                storeCode,
+                marketName
+        );
     }
 
-    private Long getOrCreateHistoricalProduct(String commodity) {
-        List<Long> ids = jdbc.queryForList("SELECT id FROM products WHERE canonical_name = ?", Long.class, commodity);
-        if (!ids.isEmpty())
-            return ids.get(0);
+    private Long getOrCreateHistoricalProduct(
+            String commodity
+    ) {
+        List<Long> existing =
+                jdbc.queryForList(
+                        """
+                        SELECT id
+                        FROM products
+                        WHERE canonical_name = ?
+                        ORDER BY id
+                        LIMIT 1
+                        """,
+                        Long.class,
+                        commodity
+                );
 
-        jdbc.update("INSERT INTO products (canonical_name, base_unit, category) VALUES (?, 'kg', 'Staples')",
-                commodity);
-        return jdbc.queryForObject("SELECT id FROM products WHERE canonical_name = ?", Long.class, commodity);
+        if (!existing.isEmpty()) {
+            return existing.get(0);
+        }
+
+        return jdbc.queryForObject(
+                """
+                INSERT INTO products (
+                    canonical_name,
+                    base_unit,
+                    category
+                )
+                VALUES (?, 'kg', 'Staples')
+                RETURNING id
+                """,
+                Long.class,
+                commodity
+        );
     }
 
-    private String sha256(String input) {
+    private String sha256(String value) {
         try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(md.digest(input.getBytes(StandardCharsets.UTF_8)));
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+            MessageDigest digest =
+                    MessageDigest.getInstance(
+                            "SHA-256"
+                    );
+
+            return HexFormat.of().formatHex(
+                    digest.digest(
+                            value.getBytes(
+                                    StandardCharsets.UTF_8
+                            )
+                    )
+            );
+
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(
+                    "SHA-256 unavailable",
+                    ex
+            );
         }
     }
 }

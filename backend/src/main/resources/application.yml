@@ -1,6 +1,9 @@
 spring:
   application:
     name: shopping-diary-api
+  config:
+    import: "optional:file:.env[.properties]"
+
   profiles:
     default: local
 
@@ -34,12 +37,13 @@ management:
         include: health,info,metrics
   endpoint:
     health:
-      show-details: always
+      show-details: when_authorized
 
 server:
   port: ${PORT:8080}
   error:
-    include-message: always
+    include-message: never
+    include-stacktrace: never
 
 springdoc:
   swagger-ui:
@@ -49,13 +53,19 @@ springdoc:
 
 app:
   jwt:
-    # Base64-encoded HS256 secret. THIS IS A DEV KEY — replace in prod.
-    # Generate one with: openssl rand -base64 32
-    secret: ${JWT_SECRET:c2hvcHBpbmctZGlhcnktZGV2LWp3dC1zZWNyZXQta2V5LXJlcGxhY2UtbWUtaW4tcHJvZA==}
-    expiration-ms: ${JWT_EXPIRATION_MS:86400000} # 24 hours
+    secret: ${JWT_SECRET}
+    expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+
   bootstrap:
     admin-email: ${BOOTSTRAP_ADMIN_EMAIL:}
     admin-password: ${BOOTSTRAP_ADMIN_PASSWORD:}
+
+shopping-diary:
+  prices:
+    max-age-days: ${PRICE_MAX_AGE_DAYS:7}
 
 loyaltyhub:
   api:
@@ -64,3 +74,8 @@ loyaltyhub:
 reefapi:
   api:
     key: ${REEFAPI_KEY:}
+
+logging:
+  level:
+    root: INFO
+    za.co.shoppingdiary: INFO

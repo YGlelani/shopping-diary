@@ -1,9 +1,12 @@
+
 package za.co.shoppingdiary.list.service;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import za.co.shoppingdiary.list.dto.*;
 import za.co.shoppingdiary.list.entity.ShoppingListItem;
 import za.co.shoppingdiary.list.repository.ShoppingListItemRepository;
@@ -12,6 +15,9 @@ import za.co.shoppingdiary.list.repository.ShoppingListRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 @Service
@@ -19,272 +25,649 @@ import java.util.*;
 public class BasketOptimizerService {
 
     private static final int MAX_SPLIT_STORES = 3;
+    private static final double DEFAULT_RADIUS_KM = 15.0;
+    private static final BigDecimal DEFAULT_COST_PER_KM =
+            new BigDecimal("4.50");
 
     private final ShoppingListRepository lists;
     private final ShoppingListItemRepository items;
     private final NamedParameterJdbcTemplate jdbc;
 
-    public OptimizeResponse optimize(Long userId, Long listId, OptimizeRequest req) {
-        // 1. Ownership check
+    @Value("${shopping-diary.prices.max-age-days:7}")
+    private int maxPriceAgeDays;
+
+    @Transactional(readOnly = true)
+    public OptimizeResponse optimize(
+            Long userId,
+            Long listId,
+            OptimizeRequest req
+    ) {
+        if (userId == null || listId == null || req == null) {
+            throw new IllegalArgumentException(
+                    "User, list and request are required"
+            );
+        }
+
         lists.findByIdAndUserId(listId, userId)
-                .orElseThrow(() -> new IllegalArgumentException("List not found"));
+                .orElseThrow(() ->
+                        new IllegalArgumentException("List not found"));
 
-        double safeRadiusKm = req.getRadiusKm() != null ? req.getRadiusKm() : 15.0;
-        BigDecimal safeCostPerKm = req.getCostPerKm() != null ? req.getCostPerKm() : new BigDecimal("4.50");
+        if (req.getLat() == null || req.getLon() == null) {
+            throw new IllegalArgumentException(
+                    "Shopping location is required"
+            );
+        }
 
-        // 2. Load items
-        List<ShoppingListItem> allItems = items.findByListIdOrderByIdAsc(listId);
+        double lat = req.getLat();
+        double lon = req.getLon();
+
+        if (!Double.isFinite(lat) || !Double.isFinite(lon)
+                || lat < -90 || lat > 90
+                || lon < -180 || lon > 180) {
+            throw new IllegalArgumentException(
+                    "Invalid location coordinates"
+            );
+        }
+
+        double radiusKm = req.getRadiusKm() != null
+                ? req.getRadiusKm()
+                : DEFAULT_RADIUS_KM;
+
+        if (!Double.isFinite(radiusKm) || radiusKm <= 0) {
+            throw new IllegalArgumentException(
+                    "Radius must be greater than zero"
+            );
+        }
+
+        BigDecimal costPerKm = req.getCostPerKm() != null
+                ? req.getCostPerKm()
+                : DEFAULT_COST_PER_KM;
+
+        if (costPerKm.signum() < 0) {
+            throw new IllegalArgumentException(
+                    "Transport cost cannot be negative"
+            );
+        }
+
+        if (maxPriceAgeDays <= 0) {
+            throw new IllegalStateException(
+                    "Price freshness period must be positive"
+            );
+        }
+
+        Instant cutoff = Instant.now()
+                .minus(maxPriceAgeDays, ChronoUnit.DAYS);
+
+        List<ShoppingListItem> allItems =
+                items.findByListIdOrderByIdAsc(listId);
+
         List<ShoppingListItem> pricedItems = allItems.stream()
-                .filter(i -> i.getProductId() != null)
+                .filter(item -> item.getProductId() != null)
                 .toList();
+
         int skipped = allItems.size() - pricedItems.size();
 
         if (pricedItems.isEmpty()) {
-            throw new IllegalArgumentException("List has no resolvable items to optimize");
+            throw new IllegalArgumentException(
+                    "List has no resolvable items to optimize"
+            );
         }
 
-        // 3. Load the (item × store) price matrix and active promotions
-        Map<Long, StoreCandidate> storesById = new LinkedHashMap<>();
-        Map<Long, ItemCandidate> itemsById = new LinkedHashMap<>();
+        Map<Long, StoreCandidate> storesById =
+                new LinkedHashMap<>();
+
+        Map<Long, ItemCandidate> itemsById =
+                new LinkedHashMap<>();
 
         String sql = """
             WITH user_point AS (
-                SELECT ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography AS g
+                SELECT ST_SetSRID(
+                    ST_MakePoint(:lon, :lat), 4326
+                )::geography AS g
             ),
             nearby_stores AS (
-                SELECT s.id, s.name, r.name AS retailer_name,
-                       ST_Distance(s.location::geography, up.g) / 1000.0 AS distance_km
+                SELECT
+                    s.id,
+                    s.name,
+                    r.name AS retailer_name,
+                    ST_Distance(
+                        s.location::geography, up.g
+                    ) / 1000.0 AS distance_km
                 FROM stores s
                 CROSS JOIN user_point up
                 JOIN retailers r ON r.id = s.retailer_id
                 WHERE s.active
-                  AND ST_DWithin(s.location::geography, up.g, :radiusMeters)
+                  AND r.active
+                  AND ST_DWithin(
+                      s.location::geography,
+                      up.g,
+                      :radiusMeters
+                  )
             ),
-            latest_price AS (
-                SELECT DISTINCT ON (po.product_id, po.store_id)
-                       po.product_id, po.store_id,
-                       po.shelf_price, po.promo_price,
-                       po.observed_at
-                FROM price_observations po
-                JOIN nearby_stores ns ON ns.id = po.store_id
-                WHERE po.product_id IN (
-                    SELECT product_id FROM shopping_list_items WHERE list_id = :listId
+            latest_observation AS (
+                SELECT DISTINCT ON (
+                    po.product_id, po.store_id
                 )
-                ORDER BY po.product_id, po.store_id, po.observed_at DESC, po.id DESC
+                    po.product_id,
+                    po.store_id,
+                    po.shelf_price,
+                    po.promo_price,
+                    po.observed_at,
+                    po.stock_status,
+                    po.verification_status
+                FROM price_observations po
+                JOIN nearby_stores ns
+                    ON ns.id = po.store_id
+                WHERE po.product_id IN (
+                    SELECT product_id
+                    FROM shopping_list_items
+                    WHERE list_id = :listId
+                      AND product_id IS NOT NULL
+                )
+                ORDER BY
+                    po.product_id,
+                    po.store_id,
+                    po.observed_at DESC,
+                    po.id DESC
+            ),
+            eligible_price AS (
+                SELECT *
+                FROM latest_observation
+                WHERE observed_at >= :cutoff
+                  AND observed_at <= CURRENT_TIMESTAMP
+                  AND stock_status = 'IN_STOCK'
+                  AND verification_status IN (
+                      'VERIFIED', 'UNVERIFIED'
+                  )
+                  AND (
+                      shelf_price > 0
+                      OR promo_price > 0
+                  )
             ),
             active_promos AS (
-                SELECT pr.product_id, pr.store_id, pr.promo_price, CASE WHEN pr.promo_type = 'DISCOUNT' THEN 1 ELSE pr.min_quantity END AS min_quantity
+                SELECT
+                    pr.product_id,
+                    pr.store_id,
+                    pr.promo_price,
+                    pr.promo_type,
+                    CASE
+                        WHEN pr.promo_type = 'DISCOUNT'
+                        THEN 1
+                        ELSE pr.min_quantity
+                    END AS min_quantity
                 FROM promotions pr
-                WHERE pr.status = 'ACTIVE' AND pr.promo_type IN ('MULTIBUY', 'DISCOUNT')
-                  AND CURRENT_DATE BETWEEN pr.start_date AND pr.end_date
+                WHERE pr.status = 'ACTIVE'
+                  AND pr.promo_type IN (
+                      'MULTIBUY', 'DISCOUNT'
+                  )
+                  AND CURRENT_DATE BETWEEN
+                      pr.start_date AND pr.end_date
+                  AND pr.promo_price > 0
             )
-            SELECT ns.id AS store_id, ns.name AS store_name,
-                   ns.retailer_name, ns.distance_km,
-                   li.id AS item_id, li.product_id, li.quantity,
-                   p.canonical_name AS product_name,
-                   lp.shelf_price, lp.promo_price AS regular_promo,
-                   ap.promo_price AS multi_buy_promo, ap.min_quantity
+            SELECT
+                ns.id AS store_id,
+                ns.name AS store_name,
+                ns.retailer_name,
+                ns.distance_km,
+                li.id AS item_id,
+                li.product_id,
+                li.quantity,
+                p.canonical_name AS product_name,
+                ep.shelf_price,
+                ep.promo_price AS regular_promo,
+                ap.promo_price AS promotion_price,
+                ap.min_quantity,
+                ap.promo_type
             FROM nearby_stores ns
             CROSS JOIN shopping_list_items li
-            LEFT JOIN latest_price lp
-                   ON lp.store_id = ns.id AND lp.product_id = li.product_id
+            LEFT JOIN eligible_price ep
+                ON ep.store_id = ns.id
+               AND ep.product_id = li.product_id
             LEFT JOIN active_promos ap
-                   ON ap.store_id = ns.id AND ap.product_id = li.product_id
-            LEFT JOIN products p ON p.id = li.product_id
-            WHERE li.list_id = :listId AND li.product_id IS NOT NULL
+                ON ap.store_id = ns.id
+               AND ap.product_id = li.product_id
+               AND ep.product_id IS NOT NULL
+            LEFT JOIN products p
+                ON p.id = li.product_id
+            WHERE li.list_id = :listId
+              AND li.product_id IS NOT NULL
             """;
 
-        var params = new MapSqlParameterSource()
-                .addValue("listId", listId)
-                .addValue("lat", req.getLat())
-                .addValue("lon", req.getLon())
-                .addValue("radiusMeters", safeRadiusKm * 1000);
+        MapSqlParameterSource params =
+                new MapSqlParameterSource()
+                        .addValue("listId", listId)
+                        .addValue("lat", lat)
+                        .addValue("lon", lon)
+                        .addValue(
+                                "radiusMeters",
+                                radiusKm * 1000.0
+                        )
+                        .addValue(
+                                "cutoff",
+                                Timestamp.from(cutoff)
+                        );
 
         jdbc.query(sql, params, rs -> {
             while (rs.next()) {
                 long storeId = rs.getLong("store_id");
                 long itemId = rs.getLong("item_id");
 
-                StoreCandidate store = storesById.computeIfAbsent(storeId, id -> {
-                    StoreCandidate s = new StoreCandidate();
-                    s.id = id;
-                    try {
-                        s.name = rs.getString("store_name");
-                        s.retailerName = rs.getString("retailer_name");
-                        s.distanceKm = rs.getDouble("distance_km");
-                    } catch (SQLException e) { throw new RuntimeException(e); }
-                    s.pricesByProduct = new HashMap<>();
-                    return s;
-                });
+                StoreCandidate store =
+                        storesById.computeIfAbsent(
+                                storeId,
+                                id -> {
+                                    StoreCandidate s =
+                                            new StoreCandidate();
+                                    s.id = id;
+                                    try {
+                                        s.name = rs.getString(
+                                                "store_name");
+                                        s.retailerName = rs.getString(
+                                                "retailer_name");
+                                        s.distanceKm = rs.getDouble(
+                                                "distance_km");
+                                    } catch (SQLException ex) {
+                                        throw new IllegalStateException(
+                                                "Unable to read store", ex);
+                                    }
+                                    s.pricesByProduct = new HashMap<>();
+                                    return s;
+                                });
 
-                ItemCandidate item = itemsById.computeIfAbsent(itemId, id -> {
-                    ItemCandidate i = new ItemCandidate();
-                    i.itemId = id;
-                    try {
-                        i.productId = rs.getLong("product_id");
-                        i.productName = rs.getString("product_name");
-                        i.quantity = rs.getBigDecimal("quantity");
-                        if (i.quantity == null) i.quantity = BigDecimal.ONE;
-                    } catch (SQLException e) { throw new RuntimeException(e); }
-                    return i;
-                });
+                ItemCandidate item =
+                        itemsById.computeIfAbsent(
+                                itemId,
+                                id -> {
+                                    ItemCandidate i =
+                                            new ItemCandidate();
+                                    i.itemId = id;
+                                    try {
+                                        i.productId = rs.getLong(
+                                                "product_id");
+                                        i.productName = rs.getString(
+                                                "product_name");
+                                        i.quantity = rs.getBigDecimal(
+                                                "quantity");
+                                        if (i.quantity == null) {
+                                            i.quantity = BigDecimal.ONE;
+                                        }
+                                    } catch (SQLException ex) {
+                                        throw new IllegalStateException(
+                                                "Unable to read item", ex);
+                                    }
+                                    return i;
+                                });
 
-                // Attach the full price data (including promos) to the store
-                BigDecimal shelf = rs.getBigDecimal("shelf_price");
-                if (shelf != null) {
-                    store.pricesByProduct.computeIfAbsent(item.productId, ignored -> new ArrayList<>()).add(new PriceData(
-                        shelf,
-                        rs.getBigDecimal("regular_promo"),
-                        rs.getBigDecimal("multi_buy_promo"),
-                        rs.getObject("min_quantity") != null ? rs.getInt("min_quantity") : null
-                    ));
+                if (item.quantity.signum() <= 0) {
+                    throw new IllegalArgumentException(
+                            "Invalid quantity for item " + item.itemId);
                 }
+
+                BigDecimal shelf =
+                        rs.getBigDecimal("shelf_price");
+                BigDecimal regularPromo =
+                        rs.getBigDecimal("regular_promo");
+
+                if (!isPositive(shelf)
+                        && !isPositive(regularPromo)) {
+                    continue;
+                }
+
+                BigDecimal promotion =
+                        rs.getBigDecimal("promotion_price");
+                String promoType = rs.getString("promo_type");
+
+                Integer minQuantity = null;
+                Object minQuantityValue =
+                        rs.getObject("min_quantity");
+
+                if (minQuantityValue != null) {
+                    minQuantity = rs.getInt("min_quantity");
+                }
+
+                if ("DISCOUNT".equals(promoType)
+                        && isPositive(promotion)) {
+                    regularPromo = minimumPositive(
+                            regularPromo, promotion);
+                    promotion = null;
+                    minQuantity = null;
+                }
+
+                PriceData price = new PriceData(
+                        shelf,
+                        regularPromo,
+                        promotion,
+                        minQuantity
+                );
+
+                store.pricesByProduct
+                        .computeIfAbsent(
+                                item.productId,
+                                ignored -> new ArrayList<>())
+                        .add(price);
             }
             return null;
         });
 
-        List<StoreCandidate> candidates = storesById.values().stream()
-                .filter(store -> !store.pricesByProduct.isEmpty())
-                .sorted(Comparator.comparingLong(store -> store.id))
-                .toList();
+        List<StoreCandidate> candidates =
+                storesById.values().stream()
+                        .filter(store ->
+                                !store.pricesByProduct.isEmpty())
+                        .sorted(Comparator.comparingLong(
+                                store -> store.id))
+                        .toList();
+
         if (candidates.isEmpty()) {
-            throw new IllegalArgumentException("No stores with prices for these items within " + safeRadiusKm + " km");
+            throw new IllegalArgumentException(
+                    "No fresh, in-stock prices found within "
+                            + radiusKm + " km"
+            );
         }
 
-        Comparator<OptimizationPlan> rank = Comparator.comparingInt(OptimizationPlan::getMissingItems)
-                .thenComparing(OptimizationPlan::getGrandTotal)
-                .thenComparingInt(plan -> plan.getStores().size());
-        Map<Integer, OptimizationPlan> best = new HashMap<>();
-        evaluateSubsets(candidates, 0, new ArrayList<>(), itemsById.values(), safeCostPerKm, best, rank);
-        OptimizationPlan recommendation = best.values().stream().min(rank).orElseThrow();
-        best.values().removeIf(plan -> plan.getMissingItems() != recommendation.getMissingItems());
+        Comparator<OptimizationPlan> rank =
+                Comparator.comparingInt(
+                                OptimizationPlan::getMissingItems)
+                        .thenComparing(
+                                OptimizationPlan::getGrandTotal)
+                        .thenComparingInt(
+                                plan -> plan.getStores().size());
+
+        Map<Integer, OptimizationPlan> best =
+                new HashMap<>();
+
+        evaluateSubsets(
+                candidates, 0, new ArrayList<>(),
+                itemsById.values(), costPerKm,
+                best, rank
+        );
+
+        OptimizationPlan recommendation =
+                best.values().stream()
+                        .min(rank)
+                        .orElseThrow();
+
+        int minimumMissing =
+                recommendation.getMissingItems();
+
+        best.values().removeIf(plan ->
+                plan.getMissingItems() != minimumMissing);
+
         OptimizationPlan best1 = best.get(1);
         OptimizationPlan best2 = best.get(2);
         OptimizationPlan best3 = best.get(3);
 
-        // 7. Savings vs single-store baseline
         BigDecimal savings = BigDecimal.ZERO;
         BigDecimal savingsPct = BigDecimal.ZERO;
-        if (best1 != null && best1.getGrandTotal().compareTo(BigDecimal.ZERO) > 0) {
-            savings = best1.getGrandTotal().subtract(recommendation.getGrandTotal())
+
+        if (best1 != null
+                && best1.getMissingItems() == minimumMissing
+                && best1.getGrandTotal().signum() > 0) {
+
+            savings = best1.getGrandTotal()
+                    .subtract(recommendation.getGrandTotal())
                     .max(BigDecimal.ZERO);
-            savingsPct = savings.multiply(new BigDecimal("100"))
-                    .divide(best1.getGrandTotal(), 1, RoundingMode.HALF_UP);
+
+            savingsPct = savings
+                    .multiply(new BigDecimal("100"))
+                    .divide(
+                            best1.getGrandTotal(),
+                            1,
+                            RoundingMode.HALF_UP);
         }
 
-        return new OptimizeResponse(recommendation, best1, best2, best3,
-                savings, savingsPct, safeCostPerKm.doubleValue(), safeRadiusKm,
-                pricedItems.size(), skipped);
+        return new OptimizeResponse(
+                recommendation, best1, best2, best3,
+                savings, savingsPct,
+                costPerKm.doubleValue(), radiusKm,
+                pricedItems.size(), skipped
+        );
     }
 
-    private void evaluateSubsets(List<StoreCandidate> candidates, int start, List<StoreCandidate> subset,
-                                 Collection<ItemCandidate> items, BigDecimal costPerKm,
-                                 Map<Integer, OptimizationPlan> best, Comparator<OptimizationPlan> rank) {
+    private void evaluateSubsets(
+            List<StoreCandidate> candidates,
+            int start,
+            List<StoreCandidate> subset,
+            Collection<ItemCandidate> allItems,
+            BigDecimal costPerKm,
+            Map<Integer, OptimizationPlan> best,
+            Comparator<OptimizationPlan> rank
+    ) {
         for (int i = start; i < candidates.size(); i++) {
             subset.add(candidates.get(i));
-            OptimizationPlan plan = buildPlan(subset, items, costPerKm);
-            best.merge(plan.getStores().size(), plan,
-                    (previous, current) -> rank.compare(previous, current) <= 0 ? previous : current);
-            if (subset.size() < MAX_SPLIT_STORES) {
-                evaluateSubsets(candidates, i + 1, subset, items, costPerKm, best, rank);
+
+            OptimizationPlan plan =
+                    buildPlan(subset, allItems, costPerKm);
+
+            int storeCount = plan.getStores().size();
+
+            if (storeCount > 0) {
+                best.merge(
+                        storeCount,
+                        plan,
+                        (previous, current) ->
+                                rank.compare(previous, current) <= 0
+                                        ? previous : current
+                );
             }
+
+            if (subset.size() < MAX_SPLIT_STORES) {
+                evaluateSubsets(
+                        candidates, i + 1, subset,
+                        allItems, costPerKm, best, rank
+                );
+            }
+
             subset.remove(subset.size() - 1);
         }
     }
 
-    static BigDecimal lineCost(PriceData price, BigDecimal quantity) {
-        BigDecimal unitPrice = price.regularPromo() == null
-                ? price.shelfPrice() : price.shelfPrice().min(price.regularPromo());
-        BigDecimal cost = unitPrice.multiply(quantity);
-        if (price.multiBuyPromo() != null && price.minQuantity() != null && price.minQuantity() > 0) {
-            BigDecimal[] bundle = quantity.divideAndRemainder(BigDecimal.valueOf(price.minQuantity()));
-            cost = cost.min(price.multiBuyPromo().multiply(bundle[0]).add(unitPrice.multiply(bundle[1])));
+    private static boolean isPositive(BigDecimal value) {
+        return value != null && value.signum() > 0;
+    }
+
+    private static BigDecimal minimumPositive(
+            BigDecimal first,
+            BigDecimal second
+    ) {
+        if (!isPositive(first)) {
+            return isPositive(second) ? second : null;
         }
+        if (!isPositive(second)) {
+            return first;
+        }
+        return first.min(second);
+    }
+
+    static BigDecimal lineCost(
+            PriceData price,
+            BigDecimal quantity
+    ) {
+        if (price == null || quantity == null
+                || quantity.signum() <= 0) {
+            throw new IllegalArgumentException(
+                    "Invalid price or quantity"
+            );
+        }
+
+        BigDecimal unitPrice = minimumPositive(
+                price.shelfPrice(),
+                price.regularPromo()
+        );
+
+        if (unitPrice == null) {
+            throw new IllegalArgumentException(
+                    "No valid unit price"
+            );
+        }
+
+        BigDecimal cost = unitPrice.multiply(quantity);
+
+        if (isPositive(price.multiBuyPromo())
+                && price.minQuantity() != null
+                && price.minQuantity() > 1) {
+
+            BigDecimal bundleSize =
+                    BigDecimal.valueOf(price.minQuantity());
+
+            BigDecimal bundleCount =
+                    quantity.divideToIntegralValue(bundleSize);
+
+            BigDecimal remainder =
+                    quantity.remainder(bundleSize);
+
+            BigDecimal bundleCost =
+                    price.multiBuyPromo()
+                            .multiply(bundleCount)
+                            .add(unitPrice.multiply(remainder));
+
+            cost = cost.min(bundleCost);
+        }
+
         return cost.setScale(2, RoundingMode.HALF_UP);
     }
 
-    private OptimizationPlan buildPlan(List<StoreCandidate> subset,
-                                       Collection<ItemCandidate> allItems,
-                                       BigDecimal costPerKm) {
+    private OptimizationPlan buildPlan(
+            List<StoreCandidate> subset,
+            Collection<ItemCandidate> allItems,
+            BigDecimal costPerKm
+    ) {
         Map<Long, Long> itemToStore = new HashMap<>();
         Map<Long, BigDecimal> itemToTotal = new HashMap<>();
+
         BigDecimal productCost = BigDecimal.ZERO;
         int missing = 0;
 
-        // Assign each item to cheapest store in subset
         for (ItemCandidate item : allItems) {
             Long bestStore = null;
             BigDecimal bestTotalCost = null;
 
             for (StoreCandidate store : subset) {
-                List<PriceData> prices = store.pricesByProduct.get(item.productId);
-                if (prices == null) continue;
-                BigDecimal totalCost = prices.stream().map(price -> lineCost(price, item.quantity))
-                        .min(BigDecimal::compareTo).orElseThrow();
-                if (bestTotalCost == null || totalCost.compareTo(bestTotalCost) < 0) {
+                List<PriceData> prices =
+                        store.pricesByProduct.get(item.productId);
+
+                if (prices == null || prices.isEmpty()) {
+                    continue;
+                }
+
+                BigDecimal totalCost = prices.stream()
+                        .map(price ->
+                                lineCost(price, item.quantity))
+                        .min(BigDecimal::compareTo)
+                        .orElse(null);
+
+                if (totalCost == null) {
+                    continue;
+                }
+
+                if (bestTotalCost == null
+                        || totalCost.compareTo(bestTotalCost) < 0) {
                     bestTotalCost = totalCost;
                     bestStore = store.id;
                 }
             }
+
             if (bestStore == null) {
                 missing++;
-            } else {
-                itemToStore.put(item.itemId, bestStore);
-                itemToTotal.put(item.itemId, bestTotalCost);
-                productCost = productCost.add(bestTotalCost);
+                continue;
             }
+
+            itemToStore.put(item.itemId, bestStore);
+            itemToTotal.put(item.itemId, bestTotalCost);
+            productCost = productCost.add(bestTotalCost);
         }
 
-        // Per-store subtotals (only used stores)
         Map<Long, BigDecimal> subtotals = new HashMap<>();
+
         for (ItemCandidate item : allItems) {
             Long storeId = itemToStore.get(item.itemId);
             if (storeId != null) {
-                BigDecimal line = itemToTotal.get(item.itemId);
-                subtotals.merge(storeId, line, BigDecimal::add);
+                subtotals.merge(
+                        storeId,
+                        itemToTotal.get(item.itemId),
+                        BigDecimal::add);
             }
         }
 
-        // Transport per actually-used store
         List<PlanStore> planStores = new ArrayList<>();
         BigDecimal transportTotal = BigDecimal.ZERO;
-        for (StoreCandidate store : subset) {
-            BigDecimal storeSubtotal = subtotals.get(store.id);
-            if (storeSubtotal == null) continue;
-            BigDecimal storeTransport = BigDecimal.valueOf(2.0 * store.distanceKm)
-                    .multiply(costPerKm)
-                    .setScale(2, RoundingMode.HALF_UP);
-            transportTotal = transportTotal.add(storeTransport);
-            planStores.add(new PlanStore(
-                    store.id, store.name, store.retailerName,
-                    Math.round(store.distanceKm * 100.0) / 100.0,
-                    storeTransport, storeSubtotal));
-        }
-        planStores.sort(Comparator.comparing(PlanStore::getDistanceKm));
 
-        // Per-item breakdown
-        List<PlanItem> planItems = new ArrayList<>();
+        for (StoreCandidate store : subset) {
+            BigDecimal subtotal = subtotals.get(store.id);
+            if (subtotal == null) {
+                continue;
+            }
+
+            BigDecimal transport =
+                    BigDecimal.valueOf(store.distanceKm)
+                            .multiply(new BigDecimal("2"))
+                            .multiply(costPerKm)
+                            .setScale(2, RoundingMode.HALF_UP);
+
+            transportTotal = transportTotal.add(transport);
+
+            planStores.add(new PlanStore(
+                    store.id,
+                    store.name,
+                    store.retailerName,
+                    Math.round(store.distanceKm * 100.0) / 100.0,
+                    transport,
+                    subtotal
+            ));
+        }
+
+        planStores.sort(Comparator.comparing(
+                PlanStore::getDistanceKm));
+
         Map<Long, String> storeNames = new HashMap<>();
-        planStores.forEach(ps -> storeNames.put(ps.getStoreId(), ps.getStoreName()));
+
+        planStores.forEach(store ->
+                storeNames.put(
+                        store.getStoreId(),
+                        store.getStoreName()));
+
+        List<PlanItem> planItems = new ArrayList<>();
+
         for (ItemCandidate item : allItems) {
             Long storeId = itemToStore.get(item.itemId);
-            if (storeId == null) continue;
+            if (storeId == null) {
+                continue;
+            }
+
             BigDecimal total = itemToTotal.get(item.itemId);
-            BigDecimal price = total.divide(item.quantity, 2, RoundingMode.HALF_UP);
+
+            BigDecimal unitPrice = total.divide(
+                    item.quantity, 2, RoundingMode.HALF_UP);
+
             planItems.add(new PlanItem(
-                    item.productId, item.productName, item.quantity,
-                    storeId, storeNames.get(storeId),
-                    price, total));
+                    item.productId,
+                    item.productName,
+                    item.quantity,
+                    storeId,
+                    storeNames.get(storeId),
+                    unitPrice,
+                    total
+            ));
         }
 
-        BigDecimal grand = productCost.add(transportTotal);
-        return new OptimizationPlan(planStores, planItems,
-                productCost, transportTotal, grand, missing);
+        BigDecimal grandTotal =
+                productCost.add(transportTotal);
+
+        return new OptimizationPlan(
+                planStores,
+                planItems,
+                productCost,
+                transportTotal,
+                grandTotal,
+                missing
+        );
     }
 
-    // ---- inner types ----
-
-    record PriceData(BigDecimal shelfPrice, BigDecimal regularPromo, BigDecimal multiBuyPromo, Integer minQuantity) {}
+    record PriceData(
+            BigDecimal shelfPrice,
+            BigDecimal regularPromo,
+            BigDecimal multiBuyPromo,
+            Integer minQuantity
+    ) {}
 
     static class StoreCandidate {
         Long id;
