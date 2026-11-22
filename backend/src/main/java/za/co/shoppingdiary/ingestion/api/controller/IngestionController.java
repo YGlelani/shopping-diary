@@ -1,3 +1,4 @@
+
 package za.co.shoppingdiary.ingestion.api.controller;
 
 import lombok.RequiredArgsConstructor;
@@ -18,20 +19,35 @@ public class IngestionController {
     private final HdxDownloadService hdxDownloadService;
 
     @PostMapping("/loyaltyhub")
-    public Map<String, String> triggerLoyaltyHubSync(@RequestParam String query) {
+    public Map<String, String> triggerLoyaltyHubSync(
+            @RequestParam String query
+    ) {
         loyaltyHubService.syncSearchResults(query);
-        return Map.of("message", "Sync triggered for query: " + query);
+
+        return Map.of(
+                "message",
+                "LoyaltyHub sync completed for: " + query
+        );
     }
 
     @PostMapping("/reefapi/promotions")
-    public Map<String, String> triggerReefApiSync(@RequestParam String retailerSlug) {
-        reefApiService.syncPromotions(retailerSlug);
-        return Map.of("message", "Promotion sync triggered for: " + retailerSlug);
+    public Map<String, Object> triggerReefApiSync(
+            @RequestParam String retailerSlug,
+            @RequestParam(required = false) String storeCode
+    ) {
+        return reefApiService.syncPromotions(
+                retailerSlug,
+                storeCode
+        );
     }
 
     @PostMapping("/hdx/trigger")
     public Map<String, String> triggerHdxSync() {
         hdxDownloadService.downloadAndImportHdxData();
-        return Map.of("message", "HDX download and import triggered.");
+
+        return Map.of(
+                "message",
+                "HDX download and import completed."
+        );
     }
 }

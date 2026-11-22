@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Map;
 
@@ -14,18 +15,34 @@ import java.util.Map;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, String>>
+    handleResponseStatus(ResponseStatusException ex) {
+
+        String message = ex.getReason();
+
+        if (message == null || message.isBlank()) {
+            message = "Request could not be completed";
+        }
+
+        return ResponseEntity
+                .status(ex.getStatusCode())
+                .body(Map.of("error", message));
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, String>>
     handleIllegalArgument(IllegalArgumentException ex) {
 
+        String message = ex.getMessage();
+
+        if (message == null || message.isBlank()) {
+            message = "Invalid request";
+        }
+
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
-                .body(Map.of(
-                        "error",
-                        ex.getMessage() == null
-                                ? "Invalid request"
-                                : ex.getMessage()
-                ));
+                .body(Map.of("error", message));
     }
 
     @ExceptionHandler(
@@ -53,7 +70,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, String>>
-    handleGeneric(Exception ex) {
+    handleUnexpected(Exception ex) {
 
         log.error(
                 "Unhandled application error",

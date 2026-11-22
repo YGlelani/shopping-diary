@@ -4,28 +4,39 @@ package za.co.shoppingdiary.ingestion.api.service;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.*;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.web.util.UriComponentsBuilder;
-import za.co.shoppingdiary.ingestion.api.dto.ReefApiProduct;
-import za.co.shoppingdiary.ingestion.api.dto.ReefApiResponse;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.sql.Date;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ReefApiService {
 
-    private static final String API_URL =
-            "https://api.reefapi.com/v1/promotions";
+    private static final String PNP_PROMOTIONS_URL =
+            "https://api.reefapi.com/pnp/v1/promotions";
+
+    private static final ZoneId SOUTH_AFRICA =
+            ZoneId.of("Africa/Johannesburg");
 
     private final JdbcTemplate jdbc;
 
@@ -35,18 +46,35 @@ public class ReefApiService {
     @Value("${reefapi.api.key:}")
     private String apiKey;
 
+    @Value("${reefapi.pnp.store-code:}")
+    private String defaultStoreCode;
+
+    /**
+     * Compatibility method for existing callers.
+     */
     public void syncPromotions(String retailerSlug) {
+        syncPromotions(retailerSlug, null);
+    }
 
-        if (apiKey == null || apiKey.isBlank()) {
-            throw new IllegalStateException(
-                    "REEFAPI_KEY is not configured"
-            );
-        }
+    /**
+     * Sync one page of Pick n Pay promotions for a
+     * specific, already-mapped store.
+     *
+     * Only exact, trusted product aliases are used.
+     * The method deliberately skips promotions that
+     * cannot be interpreted safely.
+     */
+    public Map<String, Object> syncPromotions(
+            String retailerSlug,
+            String requestedStoreCode
+    ) {
+        if (apiKey == null
+                || apiKey.isBlank()
+                || "your_reef_api_key_here".equals(apiKey)) {
 
-        if (retailerSlug == null
-                || retailerSlug.isBlank()) {
-            throw new IllegalArgumentException(
-                    "Retailer is required"
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "ReefAPI key is not configured"
             );
         }
 
@@ -54,166 +82,414 @@ public class ReefApiService {
                 retailerSlug
         );
 
-        String url = UriComponentsBuilder
-                .fromUriString(API_URL)
-                .queryParam("retailer", retailer)
-                .encode()
-                .build()
-                .toUriString();
+        if (!"picknpay".equals(retailer)) {
+            throw new ResponseStatusException(
+                    HttpStatus.UNPROCESSABLE_ENTITY,
+                    "This promotion importer currently supports "
+                            + "Pick n Pay only. Other retailers "
+                            + "require their own API adapter."
+            );
+        }
+
+        String storeCode = requestedStoreCode;
+
+        if (storeCode == null || storeCode.isBlank()) {
+            storeCode = defaultStoreCode;
+        }
+
+        if (storeCode == null || storeCode.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "A Pick n Pay store code is required"
+            );
+        }
+
+        storeCode = storeCode.trim()
+                .toUpperCase(Locale.ROOT);
+
+        if (!storeCode.matches("[A-Z0-9_-]{2,30}")) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Invalid Pick n Pay store code"
+            );
+        }
+
+        // Do not invent a physical store or attach
+        // a promotion to an arbitrary nearby branch.
+        List<Long> storeIds = jdbc.queryForList(
+                """
+                SELECT s.id
+                FROM stores s
+                JOIN retailers r
+                    ON r.id = s.retailer_id
+                WHERE r.slug = 'picknpay'
+                  AND r.active = TRUE
+                  AND s.active = TRUE
+                  AND UPPER(s.store_code) = ?
+                ORDER BY s.id
+                LIMIT 1
+                """,
+                Long.class,
+                storeCode
+        );
+
+        if (storeIds.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Store code is not mapped to an active "
+                            + "Pick n Pay branch in Shopping Diary"
+            );
+        }
+
+        Long storeId = storeIds.get(0);
 
         HttpHeaders headers = new HttpHeaders();
         headers.set("x-api-key", apiKey);
+        headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setAccept(
                 List.of(MediaType.APPLICATION_JSON)
         );
 
+        Map<String, Object> requestBody =
+                new HashMap<>();
+
+        requestBody.put("store_id", storeCode);
+        requestBody.put("page", 1);
+        requestBody.put("page_size", 24);
+
+        HttpEntity<Map<String, Object>> request =
+                new HttpEntity<>(
+                        requestBody,
+                        headers
+                );
+
+        Map<?, ?> root;
+
         try {
-            ResponseEntity<ReefApiResponse> response =
+            ResponseEntity<Map> response =
                     restTemplate.exchange(
-                            url,
-                            HttpMethod.GET,
-                            new HttpEntity<Void>(headers),
-                            ReefApiResponse.class
+                            PNP_PROMOTIONS_URL,
+                            HttpMethod.POST,
+                            request,
+                            Map.class
                     );
 
-            ReefApiResponse body = response.getBody();
+            root = response.getBody();
 
-            if (body == null
-                    || body.getData() == null) {
-                log.warn("No ReefAPI promotions returned");
-                return;
+        } catch (HttpStatusCodeException ex) {
+            log.warn(
+                    "ReefAPI rejected promotion request: HTTP {}",
+                    ex.getStatusCode().value()
+            );
+
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "ReefAPI request failed with HTTP "
+                            + ex.getStatusCode().value(),
+                    ex
+            );
+
+        } catch (RestClientException ex) {
+            log.error(
+                    "ReefAPI promotion request failed",
+                    ex
+            );
+
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Unable to contact ReefAPI",
+                    ex
+            );
+        }
+
+        if (root == null
+                || !Boolean.TRUE.equals(root.get("ok"))) {
+
+            log.warn(
+                    "ReefAPI returned an unsuccessful response"
+            );
+
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "ReefAPI did not return a successful response"
+            );
+        }
+
+        Object dataObject = root.get("data");
+
+        if (!(dataObject instanceof Map<?, ?> data)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Unexpected ReefAPI response structure"
+            );
+        }
+
+        String responseStoreCode =
+                stringValue(data.get("store_id"));
+
+        if (responseStoreCode == null
+                || !responseStoreCode.equalsIgnoreCase(
+                        storeCode
+                )
+                || Boolean.TRUE.equals(
+                        data.get("store_defaulted")
+                )) {
+
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "ReefAPI did not confirm the requested store"
+            );
+        }
+
+        Object productsObject = data.get("products");
+
+        if (!(productsObject instanceof List<?> products)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "ReefAPI response has no products array"
+            );
+        }
+
+        int matchedProducts = 0;
+        int savedPromotions = 0;
+        int skippedPromotions = 0;
+
+        LocalDate today = LocalDate.now(
+                SOUTH_AFRICA
+        );
+
+        for (Object item : products) {
+            if (!(item instanceof Map<?, ?> product)) {
+                skippedPromotions++;
+                continue;
             }
 
-            int saved = 0;
-            int skipped = 0;
+            String title = stringValue(
+                    product.get("title")
+            );
 
-            for (ReefApiProduct product :
-                    body.getData()) {
+            if (title == null) {
+                skippedPromotions++;
+                continue;
+            }
+
+            Long productId = resolveTrustedProduct(
+                    title
+            );
+
+            if (productId == null) {
+                skippedPromotions++;
+                continue;
+            }
+
+            matchedProducts++;
+
+            Object promotionsObject =
+                    product.get("promotions");
+
+            if (!(promotionsObject instanceof List<?> promos)) {
+                continue;
+            }
+
+            for (Object promoObject : promos) {
+                if (!(promoObject instanceof Map<?, ?> promo)) {
+                    skippedPromotions++;
+                    continue;
+                }
 
                 try {
-                    if (savePromotion(product, retailer)) {
-                        saved++;
+                    boolean saved = savePromotion(
+                            productId,
+                            storeId,
+                            product,
+                            promo,
+                            today
+                    );
+
+                    if (saved) {
+                        savedPromotions++;
                     } else {
-                        skipped++;
+                        skippedPromotions++;
                     }
+
                 } catch (Exception ex) {
-                    skipped++;
+                    skippedPromotions++;
+
                     log.warn(
-                            "Skipping promotion: {}",
+                            "Skipping promotion for product {}: {}",
+                            productId,
                             ex.getMessage()
                     );
                 }
             }
-
-            log.info(
-                    "ReefAPI import: saved={}, skipped={}",
-                    saved,
-                    skipped
-            );
-
-        } catch (RestClientException ex) {
-            throw new IllegalStateException(
-                    "ReefAPI request failed",
-                    ex
-            );
         }
+
+        log.info(
+                "ReefAPI sync: store={}, fetched={}, "
+                        + "matched={}, saved={}, skipped={}",
+                storeCode,
+                products.size(),
+                matchedProducts,
+                savedPromotions,
+                skippedPromotions
+        );
+
+        return Map.of(
+                "message",
+                "Pick n Pay promotion sync completed "
+                        + "for the first page",
+                "retailer",
+                "picknpay",
+                "storeCode",
+                storeCode,
+                "productsFetched",
+                products.size(),
+                "matchedProducts",
+                matchedProducts,
+                "promotionsSaved",
+                savedPromotions,
+                "promotionsSkipped",
+                skippedPromotions
+        );
     }
 
+    /**
+     * Only product aliases explicitly matched using a
+     * barcode or manual review are eligible.
+     *
+     * Fuzzy matching is intentionally excluded here.
+     */
+    private Long resolveTrustedProduct(String name) {
+
+        List<Long> matches = jdbc.queryForList(
+                """
+                SELECT a.product_id
+                FROM product_aliases a
+                JOIN retailers r
+                    ON r.id = a.retailer_id
+                WHERE r.slug = 'picknpay'
+                  AND a.raw_name = ?
+                  AND a.confidence >= 0.95
+                  AND a.matched_by IN (
+                      'BARCODE',
+                      'MANUAL'
+                  )
+                ORDER BY a.id
+                LIMIT 1
+                """,
+                Long.class,
+                name
+        );
+
+        return matches.isEmpty()
+                ? null
+                : matches.get(0);
+    }
+
+    /**
+     * Store only a promotion that:
+     * - has known dates,
+     * - does not require a loyalty card,
+     * - is not a multi-product combo,
+     * - is valid at the identified store.
+     */
     private boolean savePromotion(
-            ReefApiProduct promo,
-            String retailerSlug
+            Long productId,
+            Long storeId,
+            Map<?, ?> product,
+            Map<?, ?> promo,
+            LocalDate today
     ) {
-        if (promo == null
-                || blank(promo.getBarcode())
-                || blank(promo.getStoreId())
-                || !positive(promo.getPromoPrice())
-                || blank(promo.getStartDate())
-                || blank(promo.getEndDate())) {
+        if (Boolean.TRUE.equals(
+                promo.get("card_required")
+        )) {
             return false;
         }
 
-        LocalDate start;
-        LocalDate end;
+        LocalDate start = parseDate(
+                promo.get("starts")
+        );
 
-        try {
-            start = LocalDate.parse(
-                    promo.getStartDate()
+        LocalDate end = parseDate(
+                promo.get("ends")
+        );
+
+        if (start == null
+                || end == null
+                || end.isBefore(start)
+                || end.isBefore(today)) {
+            return false;
+        }
+
+        String kind = stringValue(
+                promo.get("kind")
+        );
+
+        String type = stringValue(
+                promo.get("type")
+        );
+
+        String promoType;
+        BigDecimal price;
+        int minimumQuantity;
+
+        if ("combo".equalsIgnoreCase(kind)) {
+            return false;
+        }
+
+        if ("multi_buy".equalsIgnoreCase(kind)) {
+
+            BigDecimal dealPrice = decimal(
+                    promo.get("deal_price")
             );
-            end = LocalDate.parse(
-                    promo.getEndDate()
+
+            Integer quantity = integer(
+                    promo.get("quantity")
             );
-        } catch (DateTimeParseException ex) {
-            return false;
-        }
 
-        if (end.isBefore(start)) {
-            return false;
-        }
+            if (!positive(dealPrice)
+                    || quantity == null
+                    || quantity <= 1) {
+                return false;
+            }
 
-        if (end.isBefore(LocalDate.now())) {
-            return false;
-        }
+            promoType = "MULTIBUY";
+            price = dealPrice;
+            minimumQuantity = quantity;
 
-        List<Long> productIds =
-                jdbc.queryForList(
-                        """
-                        SELECT id
-                        FROM products
-                        WHERE barcode = ?
-                        LIMIT 1
-                        """,
-                        Long.class,
-                        promo.getBarcode().trim()
-                );
+        } else if ("save".equalsIgnoreCase(type)) {
 
-        if (productIds.isEmpty()) {
-            return false;
-        }
-
-        List<Long> storeIds =
-                jdbc.queryForList(
-                        """
-                        SELECT s.id
-                        FROM stores s
-                        JOIN retailers r
-                            ON r.id = s.retailer_id
-                        WHERE r.slug = ?
-                          AND r.active = TRUE
-                          AND s.store_code = ?
-                          AND s.active = TRUE
-                        LIMIT 1
-                        """,
-                        Long.class,
-                        retailerSlug,
-                        promo.getStoreId().trim()
-                );
-
-        if (storeIds.isEmpty()) {
-            log.debug(
-                    "No verified store match for ReefAPI store {}",
-                    promo.getStoreId()
+            BigDecimal currentPrice = decimal(
+                    product.get("price")
             );
+
+            BigDecimal oldPrice = decimal(
+                    product.get("original_price")
+            );
+
+            if (!positive(currentPrice)
+                    || !positive(oldPrice)
+                    || currentPrice.compareTo(oldPrice) >= 0) {
+                return false;
+            }
+
+            promoType = "DISCOUNT";
+            price = currentPrice;
+            minimumQuantity = 1;
+
+        } else {
             return false;
         }
 
-        Long productId = productIds.get(0);
-        Long storeId = storeIds.get(0);
+        String description = stringValue(
+                promo.get("text")
+        );
 
-        int minQuantity =
-                promo.getMinQuantity() == null
-                        ? 1
-                        : promo.getMinQuantity();
-
-        if (minQuantity <= 0) {
-            return false;
+        if (description == null) {
+            description = stringValue(
+                    promo.get("description")
+            );
         }
-
-        String type = minQuantity > 1
-                ? "MULTIBUY"
-                : "DISCOUNT";
-
-        String description =
-                promo.getPromoDescription();
 
         if (description != null
                 && description.length() > 500) {
@@ -221,38 +497,32 @@ public class ReefApiService {
                     description.substring(0, 500);
         }
 
-        String status =
-                start.isAfter(LocalDate.now())
-                        ? "SCHEDULED"
-                        : "ACTIVE";
+        String status = start.isAfter(today)
+                ? "SCHEDULED"
+                : "ACTIVE";
 
-        // The current schema does not have a unique
-        // (product_id, store_id, start_date) constraint.
-        // Use an explicit lookup instead of invalid
-        // ON CONFLICT syntax.
-
-        List<Long> existing =
-                jdbc.queryForList(
-                        """
-                        SELECT id
-                        FROM promotions
-                        WHERE product_id = ?
-                          AND store_id = ?
-                          AND promo_type = ?
-                          AND start_date = ?
-                          AND end_date = ?
-                        ORDER BY id
-                        LIMIT 1
-                        """,
-                        Long.class,
-                        productId,
-                        storeId,
-                        type,
-                        java.sql.Date.valueOf(start),
-                        java.sql.Date.valueOf(end)
-                );
+        List<Long> existing = jdbc.queryForList(
+                """
+                SELECT id
+                FROM promotions
+                WHERE product_id = ?
+                  AND store_id = ?
+                  AND promo_type = ?
+                  AND start_date = ?
+                  AND end_date = ?
+                ORDER BY id
+                LIMIT 1
+                """,
+                Long.class,
+                productId,
+                storeId,
+                promoType,
+                Date.valueOf(start),
+                Date.valueOf(end)
+        );
 
         if (!existing.isEmpty()) {
+
             jdbc.update(
                     """
                     UPDATE promotions
@@ -262,8 +532,8 @@ public class ReefApiService {
                         status = ?
                     WHERE id = ?
                     """,
-                    promo.getPromoPrice(),
-                    minQuantity,
+                    price,
+                    minimumQuantity,
                     description,
                     status,
                     existing.get(0)
@@ -272,7 +542,7 @@ public class ReefApiService {
             return true;
         }
 
-        int inserted = jdbc.update(
+        return jdbc.update(
                 """
                 INSERT INTO promotions (
                     product_id,
@@ -289,35 +559,58 @@ public class ReefApiService {
                 """,
                 productId,
                 storeId,
-                type,
+                promoType,
                 description,
-                promo.getPromoPrice(),
-                minQuantity,
-                java.sql.Date.valueOf(start),
-                java.sql.Date.valueOf(end),
+                price,
+                minimumQuantity,
+                Date.valueOf(start),
+                Date.valueOf(end),
                 status
-        );
-
-        return inserted > 0;
+        ) > 0;
     }
 
-    private String normalizeRetailer(
-            String input
-    ) {
-        String normalized = input
-                .trim()
-                .toLowerCase(Locale.ROOT)
-                .replaceAll("[^a-z0-9]", "");
+    private LocalDate parseDate(Object value) {
+        String text = stringValue(value);
 
-        return switch (normalized) {
-            case "pnp", "picknpay" -> "picknpay";
-            case "checkers" -> "checkers";
-            case "shoprite" -> "shoprite";
-            case "woolworths" -> "woolworths";
-            case "spar" -> "spar";
-            case "flm", "foodloversmarket" -> "flm";
-            default -> normalized;
-        };
+        if (text == null || text.length() < 10) {
+            return null;
+        }
+
+        try {
+            return LocalDate.parse(
+                    text.substring(0, 10)
+            );
+        } catch (DateTimeParseException ex) {
+            return null;
+        }
+    }
+
+    private BigDecimal decimal(Object value) {
+        if (value == null) {
+            return null;
+        }
+
+        try {
+            return new BigDecimal(
+                    value.toString()
+            );
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private Integer integer(Object value) {
+        if (value == null) {
+            return null;
+        }
+
+        try {
+            return Integer.valueOf(
+                    value.toString()
+            );
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 
     private boolean positive(BigDecimal value) {
@@ -325,7 +618,28 @@ public class ReefApiService {
                 && value.signum() > 0;
     }
 
-    private boolean blank(String value) {
-        return value == null || value.isBlank();
+    private String stringValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+
+        String text = value.toString().trim();
+
+        return text.isEmpty() ? null : text;
+    }
+
+    private String normalizeRetailer(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        String slug = value.trim()
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9]", "");
+
+        return switch (slug) {
+            case "pnp", "picknpay" -> "picknpay";
+            default -> slug;
+        };
     }
 }

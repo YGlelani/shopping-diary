@@ -1,152 +1,413 @@
+
 import { useState } from 'react';
-import { UploadCloud, RefreshCw, Database, Tag } from 'lucide-react';
-import { Card, CardContent, CardHeader } from '../components/ui/Card';
+import {
+  UploadCloud,
+  RefreshCw,
+  Database,
+  Tag,
+} from 'lucide-react';
+
+import {
+  Card,
+  CardContent,
+  CardHeader,
+} from '../components/ui/Card';
+
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { apiRequest } from '../api/client';
 
 export default function Admin({ token }) {
-    const [csvFile, setCsvFile] = useState(null);
-    const [uploadStatus, setUploadStatus] = useState('');
+  const [csvFile, setCsvFile] = useState(null);
+  const [uploadStatus, setUploadStatus] = useState('');
 
-    const [loyaltyQuery, setLoyaltyQuery] = useState('milk');
-    const [reefRetailer, setReefRetailer] = useState('checkers');
-    const [syncStatus, setSyncStatus] = useState('');
+  const [loyaltyQuery, setLoyaltyQuery] =
+    useState('milk');
 
-    const handleCsvUpload = async (e) => {
-        e.preventDefault();
-        if (!csvFile) return;
-        setUploadStatus('Uploading and processing...');
+  const [loyaltyStatus, setLoyaltyStatus] =
+    useState('');
 
-        const formData = new FormData();
-        formData.append('file', csvFile);
+  const [hdxStatus, setHdxStatus] = useState('');
 
-        try {
-            const res = await apiRequest('/admin/import/csv', {
-                method: 'POST',
-                body: formData,
-                // Note: We need to bypass the JSON stringify in apiRequest for FormData
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            setUploadStatus(`Success! Imported: ${res.imported}, Skipped: ${res.skipped}, Errors: ${res.errors.length}`);
-            setCsvFile(null);
-        } catch (err) {
-            setUploadStatus(`Error: ${err.message}`);
-        }
-    };
+  const [reefStoreCode, setReefStoreCode] =
+    useState('');
 
-    const triggerSync = async (endpoint, payload, setStatus) => {
-        setStatus('Processing...');
-        try {
-            const res = await apiRequest(endpoint, {
-                method: 'POST',
-                body: JSON.stringify(payload)
-            }, token);
-            setStatus(`Success: ${res}`);
-        } catch (err) {
-            setStatus(`Error: ${err.message}`);
-        }
-    };
+  const [reefStatus, setReefStatus] = useState('');
 
-    return (
-        <div className="space-y-6 max-w-5xl mx-auto">
-            <div>
-                <h1 className="text-2xl font-bold text-gray-900">Data Ingestion</h1>
-                <p className="text-gray-500 mt-1">Manage and trigger data pipelines for products, prices, and promotions.</p>
-            </div>
+  const [reefResult, setReefResult] =
+    useState(null);
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+  const [busy, setBusy] = useState('');
 
-                {/* CSV Upload */}
-                <Card>
-                    <CardHeader>
-                        <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                            <UploadCloud size={18} /> Manual CSV Upload
-                        </h2>
-                    </CardHeader>
-                    <CardContent>
-                        <form onSubmit={handleCsvUpload} className="space-y-4">
-                            <Input
-                                type="file"
-                                accept=".csv"
-                                onChange={(e) => setCsvFile(e.target.files[0])}
-                                className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100"
-                            />
-                            <Button type="submit" disabled={!csvFile || uploadStatus.includes('Uploading')}>
-                                Upload CSV
-                            </Button>
-                            {uploadStatus && <p className="text-sm font-medium text-gray-700">{uploadStatus}</p>}
-                        </form>
-                    </CardContent>
-                </Card>
+  async function handleCsvUpload(event) {
+    event.preventDefault();
 
-                {/* LoyaltyHub Sync */}
-                <Card>
-                    <CardHeader>
-                        <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                            <RefreshCw size={18} /> LoyaltyHub Sync
-                        </h2>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="space-y-4">
-                            <p className="text-sm text-gray-500">Fetch live prices from major retailers (limited to 10 rows/call).</p>
-                            <div className="flex gap-2">
-                                <Input
-                                    value={loyaltyQuery}
-                                    onChange={e => setLoyaltyQuery(e.target.value)}
-                                    placeholder="Search term (e.g. milk)"
-                                />
-                                <Button onClick={() => triggerSync(`/admin/ingest/loyaltyhub?query=${loyaltyQuery}`, {}, setSyncStatus)}>
-                                    Sync
-                                </Button>
-                            </div>
-                            {syncStatus && <p className="text-sm font-medium text-gray-700">{syncStatus}</p>}
-                        </div>
-                    </CardContent>
-                </Card>
+    if (!csvFile || busy) {
+      return;
+    }
 
-                {/* HDX Historical */}
-                <Card>
-                    <CardHeader>
-                        <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                            <Database size={18} /> Historical Data (HDX)
-                        </h2>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="space-y-4">
-                            <p className="text-sm text-gray-500">Download the latest UN/WFP historical food price dataset.</p>
-                            <Button onClick={() => triggerSync('/admin/ingest/hdx/trigger', {}, setSyncStatus)}>
-                                Run HDX Import
-                            </Button>
-                        </div>
-                    </CardContent>
-                </Card>
+    setBusy('csv');
+    setUploadStatus('Uploading and processing...');
 
-                {/* ReefAPI Promotions */}
-                <Card>
-                    <CardHeader>
-                        <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                            <Tag size={18} /> Promotion Sync (ReefAPI)
-                        </h2>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="space-y-4">
-                            <p className="text-sm text-gray-500">Fetch active multi-buys and specials.</p>
-                            <div className="flex gap-2">
-                                <Input
-                                    value={reefRetailer}
-                                    onChange={e => setReefRetailer(e.target.value)}
-                                    placeholder="Retailer slug (e.g. checkers)"
-                                />
-                                <Button onClick={() => triggerSync(`/admin/ingest/reefapi/promotions?retailerSlug=${reefRetailer}`, {}, setSyncStatus)}>
-                                    Sync
-                                </Button>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
+    const formData = new FormData();
+    formData.append('file', csvFile);
 
-            </div>
-        </div>
+    try {
+      const response = await apiRequest(
+        '/admin/import/csv',
+        {
+          method: 'POST',
+          body: formData,
+        },
+        token
+      );
+
+      setUploadStatus(
+        `Imported: ${response.imported ?? 0}, ` +
+        `Skipped: ${response.skipped ?? 0}, ` +
+        `Errors: ${response.errors?.length ?? 0}`
+      );
+
+      setCsvFile(null);
+
+    } catch (error) {
+      setUploadStatus(
+        `Error: ${error.message}`
+      );
+
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function runSync(
+    endpoint,
+    operation,
+    setStatus,
+    onSuccess
+  ) {
+    if (busy) {
+      return;
+    }
+
+    setBusy(operation);
+    setStatus('Processing...');
+
+    try {
+      const result = await apiRequest(
+        endpoint,
+        {
+          method: 'POST',
+        },
+        token
+      );
+
+      const message =
+        result?.message ||
+        'Sync completed successfully';
+
+      setStatus(message);
+
+      if (onSuccess) {
+        onSuccess(result);
+      }
+
+    } catch (error) {
+      setStatus(
+        `Error: ${error.message}`
+      );
+
+      if (onSuccess) {
+        onSuccess(null);
+      }
+
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function syncLoyaltyHub() {
+    const query = loyaltyQuery.trim();
+
+    if (!query) {
+      setLoyaltyStatus(
+        'Enter a search query.'
+      );
+      return;
+    }
+
+    runSync(
+      `/admin/ingest/loyaltyhub?query=${encodeURIComponent(query)}`,
+      'loyalty',
+      setLoyaltyStatus
     );
+  }
+
+  function syncHdx() {
+    runSync(
+      '/admin/ingest/hdx/trigger',
+      'hdx',
+      setHdxStatus
+    );
+  }
+
+  function syncReef() {
+    const storeCode = reefStoreCode
+      .trim()
+      .toUpperCase();
+
+    if (!storeCode) {
+      setReefStatus(
+        'Enter a mapped Pick n Pay store code.'
+      );
+      return;
+    }
+
+    const params = new URLSearchParams({
+      retailerSlug: 'picknpay',
+      storeCode,
+    });
+
+    runSync(
+      `/admin/ingest/reefapi/promotions?${params}`,
+      'reef',
+      setReefStatus,
+      setReefResult
+    );
+  }
+
+  return (
+    <div className="space-y-6 max-w-5xl mx-auto">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">
+          Data Ingestion
+        </h1>
+
+        <p className="text-gray-500 mt-1">
+          Manage products, prices and
+          promotional data sources.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <UploadCloud size={18} />
+              Manual CSV Upload
+            </h2>
+          </CardHeader>
+
+          <CardContent>
+            <form
+              onSubmit={handleCsvUpload}
+              className="space-y-4"
+            >
+              <Input
+                type="file"
+                accept=".csv"
+                onChange={event =>
+                  setCsvFile(
+                    event.target.files?.[0] || null
+                  )
+                }
+              />
+
+              <Button
+                type="submit"
+                disabled={!csvFile || Boolean(busy)}
+              >
+                {busy === 'csv'
+                  ? 'Uploading...'
+                  : 'Upload CSV'}
+              </Button>
+
+              {uploadStatus && (
+                <p
+                  role="status"
+                  className="text-sm text-gray-700"
+                >
+                  {uploadStatus}
+                </p>
+              )}
+            </form>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <RefreshCw size={18} />
+              LoyaltyHub Sync
+            </h2>
+          </CardHeader>
+
+          <CardContent className="space-y-4">
+            <p className="text-sm text-gray-500">
+              Import available grocery price
+              observations from LoyaltyHub.
+            </p>
+
+            <Input
+              value={loyaltyQuery}
+              onChange={event =>
+                setLoyaltyQuery(event.target.value)
+              }
+              placeholder="Search term, e.g. milk"
+            />
+
+            <Button
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={syncLoyaltyHub}
+            >
+              {busy === 'loyalty'
+                ? 'Syncing...'
+                : 'Sync Prices'}
+            </Button>
+
+            {loyaltyStatus && (
+              <p
+                role="status"
+                className="text-sm text-gray-700"
+              >
+                {loyaltyStatus}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <Database size={18} />
+              Historical Data (HDX)
+            </h2>
+          </CardHeader>
+
+          <CardContent className="space-y-4">
+            <p className="text-sm text-gray-500">
+              Import historical food-price
+              observations for analysis.
+              These are not current store-stock
+              confirmations.
+            </p>
+
+            <Button
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={syncHdx}
+            >
+              {busy === 'hdx'
+                ? 'Importing...'
+                : 'Run HDX Import'}
+            </Button>
+
+            {hdxStatus && (
+              <p
+                role="status"
+                className="text-sm text-gray-700"
+              >
+                {hdxStatus}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <Tag size={18} />
+              Promotion Sync (ReefAPI)
+            </h2>
+          </CardHeader>
+
+          <CardContent className="space-y-4">
+            <p className="text-sm text-gray-500">
+              Import supported Pick n Pay
+              promotions for a mapped store.
+              Unsupported, membership-only
+              or ambiguous deals are skipped.
+            </p>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-700">
+                Retailer
+              </label>
+
+              <Input
+                value="Pick n Pay"
+                disabled
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-700">
+                Pick n Pay store code
+              </label>
+
+              <Input
+                value={reefStoreCode}
+                onChange={event =>
+                  setReefStoreCode(
+                    event.target.value.toUpperCase()
+                  )
+                }
+                placeholder="e.g. WC21"
+              />
+
+              <p className="text-xs text-gray-500">
+                The code must belong to an
+                active Pick n Pay branch
+                already mapped in Shopping Diary.
+              </p>
+            </div>
+
+            <Button
+              type="button"
+              disabled={
+                Boolean(busy) ||
+                !reefStoreCode.trim()
+              }
+              onClick={syncReef}
+            >
+              {busy === 'reef'
+                ? 'Syncing...'
+                : 'Sync Promotions'}
+            </Button>
+
+            {reefStatus && (
+              <p
+                role="status"
+                className="text-sm text-gray-700"
+              >
+                {reefStatus}
+              </p>
+            )}
+
+            {reefResult && (
+              <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700 space-y-1">
+                <p>
+                  Products fetched:{' '}
+                  {reefResult.productsFetched ?? 0}
+                </p>
+                <p>
+                  Matched products:{' '}
+                  {reefResult.matchedProducts ?? 0}
+                </p>
+                <p>
+                  Promotions saved:{' '}
+                  {reefResult.promotionsSaved ?? 0}
+                </p>
+                <p>
+                  Promotions skipped:{' '}
+                  {reefResult.promotionsSkipped ?? 0}
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
 }
