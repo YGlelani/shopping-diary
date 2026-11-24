@@ -229,12 +229,13 @@ public class ProductSearchService {
                        CASE WHEN p.canonical_name !~* '[0-9][[:space:]]*[x?][[:space:]]*[0-9]' THEN
                            substring(p.canonical_name FROM '(?i)[[:space:]]([0-9]+(?:[.,][0-9]+)?[[:space:]]*(?:kg|g|ml|l|count|pack|pk))[[:space:]]*$')
                        END) AS size_text,
-                   ST_Distance(s.location::geography, up.location) AS distance_m, po.*
+                   ST_Distance(s.location::geography, up.location) AS distance_m, po.*, quote.total AS quantity_total
             FROM stores s
             CROSS JOIN user_point up
             JOIN retailers r ON r.id = s.retailer_id
             JOIN products p ON p.id = :productId
             %s
+            CROSS JOIN LATERAL branch_quantity_quote(p.id,s.id,:maxAgeDays,:quantity) quote
             WHERE s.active AND r.active AND s.store_code IS DISTINCT FROM 'ONLINE' AND ST_DWithin(s.location::geography, up.location, :radiusMeters)
               AND (CAST(:retailer AS text) IS NULL OR r.slug = :retailer)
               AND (CAST(:verification AS text) IS NULL OR po.verification_status = :verification)
@@ -243,6 +244,7 @@ public class ProductSearchService {
 
         var params = new MapSqlParameterSource()
                 .addValue("productId", productId)
+                .addValue("quantity", quantity)
                 .addValue("retailer", retailer, Types.VARCHAR)
                 .addValue("verification", verification, Types.VARCHAR)
                 .addValue("maxAgeDays", maxAgeDays)
@@ -262,6 +264,7 @@ public class ProductSearchService {
             row.setCity(rs.getString("city"));
             row.setSourceType(rs.getString("source_type"));
             row.setEffectivePrice(rs.getBigDecimal("effective_price"));
+            row.setTotalPrice(rs.getBigDecimal("quantity_total"));
             row.setShelfPrice(rs.getBigDecimal("shelf_price"));
             var promo = rs.getBigDecimal("promo_price");
             if (promo != null && (row.getShelfPrice() == null || promo.compareTo(row.getShelfPrice()) < 0)) {
@@ -279,13 +282,7 @@ public class ProductSearchService {
             addActivePromotions(productId, prices);
         }
         for (var price : prices) {
-            var total = OfferPricing.total(price.getEffectivePrice(), quantity, null, null);
-            for (var offer : price.getPromotions()) {
-                if ("MULTIBUY".equals(offer.type())) {
-                    total = total.min(OfferPricing.total(price.getEffectivePrice(), quantity, offer.price(), offer.minQuantity()));
-                }
-            }
-            price.setTotalPrice(total);
+            var total = price.getTotalPrice();
             price.setEffectivePrice(total.divide(quantity, 2, RoundingMode.HALF_UP));
             var measure = price.getPackageMeasure();
             if (measure != null) {

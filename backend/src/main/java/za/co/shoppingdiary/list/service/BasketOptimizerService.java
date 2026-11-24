@@ -36,7 +36,8 @@ public class BasketOptimizerService {
     record Entry(long id, Long productId, String name, BigDecimal quantity, String unit, Long substituteProductId) {}
     record Offer(long branchId, long itemId, long productId, String name, String sizeText, String imageUrl,
                  BigDecimal total, long observationId, OffsetDateTime observedAt, String verificationStatus,
-                 String sourceType, LocalDate promotionEndsOn, String priceType, boolean alternatives) {}
+                 String sourceType, LocalDate promotionEndsOn, String priceType, boolean alternatives,
+                 Long promotionId,String promotionTerms,BigDecimal shelfTotal) {}
     record Candidate(Branch branch, Map<Long, Offer> offers) {}
     record Choice(List<Branch> stores, Map<Long, Offer> assignments, BigDecimal grocery, BigDecimal transport,
                   double roundTripKm, int substitutions, int unverified, boolean preferred) {
@@ -75,7 +76,7 @@ public class BasketOptimizerService {
         var eligible = directory.stream().filter(branch -> !request.getExcludedRetailers().contains(branch.retailerId())).toList();
         var permitted = compatibleAlternatives(entries,request);
         var offers = eligible.isEmpty() || entries.isEmpty() ? List.<Offer>of()
-                : offers(listId,eligible,permitted,request.isAllowAlternatives());
+                : offers(listId,eligible,permitted,request);
         var evidence = missingEvidence(entries,offers,eligible);
         var exact = candidates(eligible,offers,false);
         var flexible = candidates(eligible,offers,true);
@@ -142,39 +143,34 @@ public class BasketOptimizerService {
                 .map(Entry::id).toList();
     }
 
-    private List<Offer> offers(long list,List<Branch> branches,List<Long> permitted,boolean flexible) {
+    private List<Offer> offers(long list,List<Branch> branches,List<Long> permitted,OptimizeRequest request) {
         return jdbc.sql("""
             SELECT s.id AS branch_id,li.id AS item_id,p.id AS product_id,p.canonical_name AS name,
                    p.size_text,p.image_url,offer.total,ob.id AS observation_id,price.observed_at,
-                   price.verification_status,price.source_type,deal.ends_on AS promotion_ends_on,
-                   CASE WHEN offer.total < round(li.quantity*price.effective_price,2) THEN 'MULTIBUY'
-                        WHEN price.effective_price < price.shelf_price OR price.shelf_price IS NULL THEN 'PROMOTION'
-                        ELSE 'SHELF' END AS price_type, mode.alternatives
+                   price.verification_status,price.source_type,offer.promotion_ends_on,offer.price_type,mode.alternatives,
+                   offer.promotion_id,coalesce(pr.description,
+                       CASE pr.promo_type
+                         WHEN 'MULTIBUY' THEN concat('Buy ',pr.min_quantity,' for R',pr.promo_price)
+                         WHEN 'BOGOF' THEN concat('Buy ',pr.min_quantity,', get ',pr.free_quantity,' free')
+                         WHEN 'PERCENT' THEN concat(pr.percent_off,' percent off')
+                         WHEN 'MEMBER' THEN concat(pr.loyalty_program,' required')
+                         WHEN 'DISCOUNT' THEN concat('Minimum ',coalesce(pr.min_quantity,1),' package(s)')
+                       END) AS promotion_terms,offer.shelf_total
             FROM shopping_list_items li
             CROSS JOIN stores s
             CROSS JOIN (VALUES (false),(true)) mode(alternatives)
-            CROSS JOIN LATERAL shopping_list_item_offer(
+            CROSS JOIN LATERAL shopping_list_item_quote(
                 CASE WHEN mode.alternatives AND li.id IN (:permitted)
                      THEN li ELSE jsonb_populate_record(li,'{"substitute_product_id":null}'::jsonb) END,
-                s.id,:age) offer
+                s.id,:age,s.retailer_id IN (:loyalty),:ignorePromotions) offer
             JOIN products p ON p.id=offer.product_id
-            CROSS JOIN LATERAL current_branch_price(p.id,s.id,:age) price
-            CROSS JOIN LATERAL (
-                SELECT id FROM price_observations
-                WHERE product_id=p.id AND store_id=s.id AND observed_at=price.observed_at ORDER BY id DESC LIMIT 1
-            ) ob
-            LEFT JOIN LATERAL (
-                SELECT min(pr.end_date) AS ends_on FROM current_branch_promotions pr
-                WHERE pr.product_id=p.id AND pr.store_id=s.id AND
-                    ((pr.promo_type='DISCOUNT' AND coalesce(pr.min_quantity,1)=1 AND pr.promo_price=price.effective_price
-                       AND (price.shelf_price IS NULL OR price.effective_price < price.shelf_price))
-                    OR (pr.promo_type='MULTIBUY' AND offer.total<round(li.quantity*price.effective_price,2)
-                       AND round(pr.promo_price*trunc(li.quantity/nullif(pr.min_quantity,0))
-                                 + price.effective_price*mod(li.quantity,nullif(pr.min_quantity,0)),2)=offer.total))
-            ) deal ON TRUE
+            CROSS JOIN LATERAL eligible_branch_observation(p.id,s.id,:age) price
+            CROSS JOIN LATERAL (SELECT price.id) ob
+            LEFT JOIN promotions pr ON pr.id=offer.promotion_id
             WHERE li.list_id=:list AND NOT li.purchased AND li.product_id IS NOT NULL AND s.id IN (:branches)
               AND (:flexible OR NOT mode.alternatives)
-            """).param("list",list).param("age",maxPriceAgeDays).param("flexible",flexible)
+            """).param("list",list).param("age",maxPriceAgeDays).param("flexible",request.isAllowAlternatives()).param("ignorePromotions",request.isIgnorePromotions())
+                .param("loyalty",request.getConfirmedLoyaltyRetailers().isEmpty() ? Set.of(-1L) : request.getConfirmedLoyaltyRetailers())
                 .param("branches",branches.stream().map(Branch::id).toList())
                 .param("permitted",permitted.isEmpty() ? List.of(-1L) : permitted)
                 .query(Offer.class).list();
@@ -405,6 +401,9 @@ public class BasketOptimizerService {
         line.setSourceType(offer.sourceType());
         line.setPromotionEndsOn(offer.promotionEndsOn());
         line.setPriceType(offer.priceType());
+        line.setPromotionId(offer.promotionId());
+        line.setPromotionTerms(offer.promotionTerms());
+        line.setShelfLineTotal(offer.shelfTotal());
         if (entry.productId()!=offer.productId()) {
             line.setSubstitutedFor(entry.name());
             if (exact!=null) exact.stream().filter(store -> store.branch().id()==branch.id())

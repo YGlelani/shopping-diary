@@ -12,6 +12,7 @@ import za.co.shoppingdiary.auth.UserPrincipal;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @RestController
@@ -59,16 +60,18 @@ public class GroceryBudgetController {
     @GetMapping("/{id}/estimate")
     public GroceryBudgetService.Estimate estimate(@AuthenticationPrincipal UserPrincipal me, @PathVariable long id,
             @RequestParam(required = false) Double lat, @RequestParam(required = false) Double lon,
-            @RequestParam(defaultValue = "15") double r, @RequestParam(required = false) Long branchId) {
-        return service.estimate(me.getId(), id, lat, lon, r, branchId);
+            @RequestParam(defaultValue = "15") double r, @RequestParam(required = false) Long branchId,
+            @RequestParam(name="loyaltyRetailer",required=false) Set<Long> loyalty) {
+        return service.estimate(me.getId(), id, lat, lon, r, branchId,loyalty==null ? Set.of() : loyalty);
     }
 
     @PostMapping("/{id}/archive")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void archive(@AuthenticationPrincipal UserPrincipal me, @PathVariable long id, @RequestParam long revision,
             @RequestParam(required = false) Double lat, @RequestParam(required = false) Double lon,
-            @RequestParam(defaultValue = "15") double r, @RequestParam(required = false) Long branchId) {
-        service.archive(me.getId(), id, revision, lat, lon, r, branchId);
+            @RequestParam(defaultValue = "15") double r, @RequestParam(required = false) Long branchId,
+            @RequestParam(name="loyaltyRetailer",required=false) Set<Long> loyalty) {
+        service.archive(me.getId(), id, revision, lat, lon, r, branchId,loyalty==null ? Set.of() : loyalty);
     }
 
     @DeleteMapping("/{id}")

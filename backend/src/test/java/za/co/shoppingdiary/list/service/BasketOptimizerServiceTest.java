@@ -85,7 +85,7 @@ class BasketOptimizerServiceTest {
         var branch = new Branch(id,id,"Branch "+id,"Retailer","",-26,longitude,0);
         var offers = new java.util.HashMap<Long,Offer>();
         prices.forEach((item,price) -> offers.put(item,new Offer(id,item,item,"Entry "+item,"1 kg",null,
-                BigDecimal.valueOf(price),item,OBSERVED,"VERIFIED","MANUAL",null,"SHELF",false)));
+                BigDecimal.valueOf(price),item,OBSERVED,"VERIFIED","MANUAL",null,"SHELF",false,null,null,null)));
         return new Candidate(branch,offers);
     }
 

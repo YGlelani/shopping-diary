@@ -111,8 +111,9 @@ function Details({ id, location, token, onAddItem }) {
             {row.memberPrice && <p className="text-sm">Members only {formatProductPrice(row.memberPrice)}</p>}
             {row.promotionType && <p className="text-sm text-emerald-800">
               {row.promotionType === 'MULTIBUY' ? 'Buy ' + row.minQuantity + ' for ' + formatProductPrice(row.promotionPrice)
-                : (row.promotionType === 'MEMBER' ? 'Members only offer ' :
-                  row.promotionType === 'BOGOF' ? 'Buy-one-get-one offer ' : 'Branch promotion ') + formatProductPrice(row.promotionPrice)}
+                : row.promotionType === 'PERCENT' ? 'Percentage discount'
+                : row.promotionType === 'BOGOF' ? 'Buy and get free offer'
+                  : (row.promotionType === 'MEMBER' ? 'Members only offer ' : 'Branch promotion ') + formatProductPrice(row.promotionPrice)}
               {' · Until ' + formatObservationDate(row.promotionEnds)}
             </p>}
             <p className="text-sm text-gray-600">Current · {row.verificationStatus === 'VERIFIED' ? 'Verified' : 'Unverified'} · {row.sourceType}</p>

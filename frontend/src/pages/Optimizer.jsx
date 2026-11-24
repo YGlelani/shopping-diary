@@ -29,7 +29,7 @@ const missingReasons = {
   UNKNOWN_STOCK_OBSERVATION: 'A nearby price has unconfirmed stock',
   STALE_OBSERVATION: 'A nearby price observation is outdated',
 };
-const defaults = { radiusKm: 15, maxStores: 2, allowAlternatives: true, travelMode: 'UNKNOWN', costPerKm: '', tripCost: '', budget: '', preferredRetailer: '', excludedRetailers: [], rejectedAlternatives: [] };
+const defaults = { radiusKm: 15, maxStores: 2, allowAlternatives: true, travelMode: 'UNKNOWN', costPerKm: '', tripCost: '', budget: '', preferredRetailer: '', excludedRetailers: [], rejectedAlternatives: [], confirmedLoyaltyRetailers: [], ignorePromotions: false };
 const stamp = value => new Date(value).toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg' });
 
 function useRows(path, token, revision) {
@@ -72,7 +72,9 @@ function PlanDetails({ plan, onReject }) {
         <div className="min-w-0 flex-1 break-words">
           <p className="font-medium">{item.quantity} × {item.productName}{item.sizeText && ' · ' + item.sizeText}</p>
           <p className="text-gray-600">{item.verificationStatus === 'VERIFIED' ? 'Verified observation' : 'Unverified observation'} · {stamp(item.observedAt)}</p>
-          {item.priceType !== 'SHELF' && <p className="text-emerald-800">{item.priceType === 'MULTIBUY' ? 'Qualifying multibuy' : 'Eligible promotion'}{item.promotionEndsOn && ' · ends ' + item.promotionEndsOn}</p>}
+          {item.priceType !== 'SHELF' && <p className="text-emerald-800">{({ MULTIBUY: 'Qualifying multibuy', BOGOF: 'Qualifying buy-and-get-free offer', PERCENT: 'Percentage discount', MEMBER: 'Confirmed member price' })[item.priceType] || 'Eligible promotion'}{item.promotionEndsOn && ' · ends ' + item.promotionEndsOn}</p>}
+          {item.promotionTerms && <p className="text-gray-600">{item.promotionTerms}</p>}
+          {item.priceType !== 'SHELF' && item.shelfLineTotal != null && <p className="text-gray-600">Same quantity at shelf price {money(item.shelfLineTotal)}</p>}
           {item.substitutedFor && <div className="space-y-1 text-amber-900">
             <p>Approved option for {item.substitutedFor}. {item.exactLineTotal == null ? 'Original price unavailable at this branch.' : 'Original at this branch ' + money(item.exactLineTotal) + '.'}</p>
             {onReject && <button type="button" className={link} onClick={() => onReject(item.itemId)}>Keep original and recalculate</button>}
@@ -93,6 +95,7 @@ function PlanDetails({ plan, onReject }) {
 export default function Optimizer({ token, listId, lists, onSelect, location, onLocationChange, radius = 15 }) {
   const [settings, setSettings] = useState({ ...defaults, radiusKm: radius });
   const [result, setResult] = useState(null);
+  const [shelfResult, setShelfResult] = useState(null);
   const [selected, setSelected] = useState('ONE_STORE');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -114,6 +117,16 @@ export default function Optimizer({ token, listId, lists, onSelect, location, on
   const current = result?.key === currentKey ? result.data : null;
   const plans = current ? [current.bestSingleStore, current.bestSplit, current.bestAlternatives] : [];
   const active = plans.find(plan => plan.strategy === selected);
+  const shelfPlan = shelfResult?.key === current?.calculatedAt ? shelfResult?.plan : null;
+
+  function compareShelf() {
+    return run(async () => {
+      const data = await apiRequest('/lists/' + listId + '/optimize', {
+        method: 'POST', body: JSON.stringify({ ...current.assumptions, ignorePromotions: true }),
+      }, token);
+      setShelfResult({ key: current.calculatedAt, plan: data.recommendation });
+    });
+  }
 
   function change(key, value) {
     setSettings(previous => ({ ...previous, [key]: value }));
@@ -175,7 +188,9 @@ export default function Optimizer({ token, listId, lists, onSelect, location, on
     const updated = { ...defaults, radiusKm: request.radiusKm, maxStores: request.maxStores, allowAlternatives: request.allowAlternatives,
       travelMode: request.travelMode, costPerKm: request.costPerKm ?? '', tripCost: request.tripCost ?? '',
       budget: request.budgetId ? 'saved:' + request.budgetId : request.budgetAmount == null ? '' : String(request.budgetAmount),
-      excludedRetailers: request.excludedRetailers, preferredRetailer: request.preferredRetailer ?? '', rejectedAlternatives: request.rejectedAlternatives };
+      excludedRetailers: request.excludedRetailers, preferredRetailer: request.preferredRetailer ?? '',
+      rejectedAlternatives: request.rejectedAlternatives, confirmedLoyaltyRetailers: request.confirmedLoyaltyRetailers ?? [],
+      ignorePromotions: request.ignorePromotions ?? false };
     if (!location && row?.locationLat == null) {
       return run(async () => {
         const data = await apiRequest('/lists/' + id + '/optimize', { method: 'POST', body: JSON.stringify(asRequest(updated, point)) }, token);
@@ -229,6 +244,13 @@ export default function Optimizer({ token, listId, lists, onSelect, location, on
         <div className="mt-3 space-y-3">
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={settings.allowAlternatives} onChange={event => change('allowAlternatives', event.target.checked)} /> Compare alternatives already approved on this list</label>
           {settings.rejectedAlternatives.length > 0 && <button type="button" className={'text-sm ' + link} onClick={() => { change('rejectedAlternatives', []); }}>Restore rejected alternatives</button>}
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={settings.ignorePromotions} onChange={event => change('ignorePromotions', event.target.checked)} /> Use shelf prices only</label>
+          <fieldset className="grid gap-2 sm:grid-cols-3" disabled={settings.ignorePromotions}>
+            <legend className="mb-2 text-sm font-medium">I have the required loyalty card for</legend>
+            {retailers?.rows?.filter(row => row.active).map(row => <label className="flex items-center gap-2 text-sm" key={row.id}><input type="checkbox"
+              checked={settings.confirmedLoyaltyRetailers.includes(row.id)} onChange={event => change('confirmedLoyaltyRetailers',
+                event.target.checked ? [...settings.confirmedLoyaltyRetailers, row.id] : settings.confirmedLoyaltyRetailers.filter(id => id !== row.id))} />{row.name}</label>)}
+          </fieldset>
           <label className="block text-sm">Preferred retailer for otherwise comparable plans<select className={field} value={settings.preferredRetailer} onChange={event => change('preferredRetailer', Number(event.target.value) || '')}>
             <option value="">Any retailer</option>{retailers?.rows?.filter(row => row.active).map(row => <option key={row.id} value={row.id}>{row.name}</option>)}
           </select></label>
@@ -264,8 +286,15 @@ export default function Optimizer({ token, listId, lists, onSelect, location, on
           <Button type="button" variant="secondary" aria-pressed={selected === plan.strategy} onClick={() => setSelected(plan.strategy)}>View strategy</Button>
         </div>)}
       </div>
+      {!settings.ignorePromotions && <Button type="button" variant="secondary" disabled={busy} onClick={compareShelf}>Compare with shelf prices only</Button>}
+      {shelfPlan && <div className="rounded-lg border border-gray-200 p-3">
+        <h3 className="font-semibold">Shelf-price comparison</h3>
+        <p className="mb-2 text-sm text-gray-600">{shelfPlan.items.length} of {current.totalItems} entries priced. {statuses[shelfPlan.budgetStatus]}</p>
+        <Cost plan={shelfPlan} />
+        <p className="mt-2 text-sm text-gray-600">Shelf prices can change which branches make the best trip. Full trip comparisons require both plans to cover all entries and have known transport.</p>
+      </div>}
       <details><summary className="cursor-pointer text-sm font-medium">Branches checked and price policy</summary>
-        <p className="my-2 text-sm text-gray-600">Branch prices require fresh, in-stock observations. Unsupported and loyalty-only discounts are excluded. Check offer terms and availability before travelling.</p>
+        <p className="my-2 text-sm text-gray-600">Branch prices require fresh, in-stock observations. Coupons and bundles without validated terms are excluded. Member prices require your confirmation. Check offer terms and availability before travelling.</p>
         <ul className="grid gap-1 text-sm sm:grid-cols-2">{current.branches.map(branch => <li key={branch.storeId}>{branch.storeName} · {branch.distanceKm} km</li>)}</ul>
       </details>
     </section>}

@@ -228,8 +228,10 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, radius
                             <div key={index} className="mt-1 max-w-52 whitespace-normal text-xs font-normal text-emerald-800">
                               {promotion.type === 'MULTIBUY'
                                 ? 'Buy ' + promotion.minQuantity + ' for ' + formatProductPrice(promotion.price)
-                                : (promotion.type === 'MEMBER' ? 'Member offer ' : 'Offer ') + formatProductPrice(promotion.price)}
-                              {promotion.type !== 'MULTIBUY' && promotion.minQuantity > 1 &&
+                                : promotion.type === 'PERCENT' ? 'Percentage discount'
+                                  : promotion.type === 'BOGOF' ? 'Buy and get free'
+                                    : (promotion.type === 'MEMBER' ? 'Member offer ' : 'Offer ') + formatProductPrice(promotion.price)}
+                              {!['MULTIBUY', 'BOGOF'].includes(promotion.type) && promotion.minQuantity > 1 &&
                                 <span className="block">Minimum {promotion.minQuantity} packages</span>}
                               {promotion.description && <span className="block">{promotion.description}</span>}
                               <span className="block">{formatObservationDate(promotion.startsOn)} to {formatObservationDate(promotion.endsOn)}</span>

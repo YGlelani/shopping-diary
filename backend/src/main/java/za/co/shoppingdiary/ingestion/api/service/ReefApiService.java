@@ -10,6 +10,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpStatusCodeException;
@@ -41,8 +42,14 @@ public class ReefApiService {
 
     private final JdbcTemplate jdbc;
 
-    private final RestTemplate restTemplate =
-            new RestTemplate();
+    private final RestTemplate restTemplate = client();
+
+    private static RestTemplate client() {
+        var factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5000);
+        factory.setReadTimeout(15000);
+        return new RestTemplate(factory);
+    }
 
     @Value("${reefapi.api.key:}")
     private String apiKey;
@@ -253,6 +260,7 @@ public class ReefApiService {
 
         int matchedProducts = 0;
         int savedPromotions = 0;
+        int unchangedPromotions = 0;
         int skippedPromotions = 0;
         var unmatchedTitles = new LinkedHashSet<String>();
 
@@ -275,9 +283,11 @@ public class ReefApiService {
                 continue;
             }
 
-            Long productId = resolveTrustedProduct(
-                    title
-            );
+            String barcode = stringValue(product.get("barcode"));
+            Long productId = barcode==null || !barcode.matches("[0-9]{8,14}")
+                    ? resolveTrustedProduct(title)
+                    : jdbc.queryForList("SELECT id FROM products WHERE barcode=?",Long.class,barcode)
+                        .stream().findFirst().orElse(null);
 
             if (productId == null) {
                 if (unmatchedTitles.size() < 30) unmatchedTitles.add(title.substring(0, Math.min(title.length(), 500)));
@@ -301,20 +311,11 @@ public class ReefApiService {
                 }
 
                 try {
-                    boolean saved = savePromotion(
-                            productId,
-                            storeId,
-                            product,
-                            promo,
-                            today
-                    );
-
-                    if (saved) {
-                        savedPromotions++;
-                    } else {
-                        skippedPromotions++;
+                    switch (savePromotion(productId,storeId,product,promo,today)) {
+                        case SAVED -> savedPromotions++;
+                        case UNCHANGED -> unchangedPromotions++;
+                        case SKIPPED -> skippedPromotions++;
                     }
-
                 } catch (Exception ex) {
                     skippedPromotions++;
 
@@ -353,6 +354,8 @@ public class ReefApiService {
                 savedPromotions,
                 "promotionsSkipped",
                 skippedPromotions,
+                "promotionsUnchanged",
+                unchangedPromotions,
                 "unmatchedTitles", List.copyOf(unmatchedTitles)
         );
     }
@@ -391,24 +394,16 @@ public class ReefApiService {
     }
 
     /**
-     * Store only a promotion that:
-     * - has known dates,
-     * - does not require a loyalty card,
-     * - is not a multi-product combo,
-     * - is valid at the identified store.
+     * Queue dated branch offers and preserve the provider's advertised terms for review.
      */
-    private boolean savePromotion(
+    private ImportOutcome savePromotion(
             Long productId,
             Long storeId,
             Map<?, ?> product,
             Map<?, ?> promo,
             LocalDate today
     ) {
-        if (Boolean.TRUE.equals(
-                promo.get("card_required")
-        )) {
-            return false;
-        }
+        boolean member = Boolean.TRUE.equals(promo.get("card_required"));
 
         LocalDate start = parseDate(
                 promo.get("starts")
@@ -422,7 +417,7 @@ public class ReefApiService {
                 || end == null
                 || end.isBefore(start)
                 || end.isBefore(today)) {
-            return false;
+            return ImportOutcome.SKIPPED;
         }
 
         String kind = stringValue(
@@ -438,10 +433,10 @@ public class ReefApiService {
         int minimumQuantity;
 
         if ("combo".equalsIgnoreCase(kind)) {
-            return false;
-        }
-
-        if ("multi_buy".equalsIgnoreCase(kind)) {
+            promoType = "BUNDLE";
+            price = decimal(promo.get("deal_price"));
+            minimumQuantity = 1;
+        } else if ("multi_buy".equalsIgnoreCase(kind)) {
 
             BigDecimal dealPrice = decimal(
                     promo.get("deal_price")
@@ -454,7 +449,7 @@ public class ReefApiService {
             if (!positive(dealPrice)
                     || quantity == null
                     || quantity <= 1) {
-                return false;
+                return ImportOutcome.SKIPPED;
             }
 
             promoType = "MULTIBUY";
@@ -474,15 +469,15 @@ public class ReefApiService {
             if (!positive(currentPrice)
                     || !positive(oldPrice)
                     || currentPrice.compareTo(oldPrice) >= 0) {
-                return false;
+                return ImportOutcome.SKIPPED;
             }
 
-            promoType = "DISCOUNT";
+            promoType = member ? "MEMBER" : "DISCOUNT";
             price = currentPrice;
             minimumQuantity = 1;
 
         } else {
-            return false;
+            return ImportOutcome.SKIPPED;
         }
 
         String description = stringValue(
@@ -501,77 +496,24 @@ public class ReefApiService {
                     description.substring(0, 500);
         }
 
-        String status = start.isAfter(today)
-                ? "SCHEDULED"
-                : "ACTIVE";
-
-        List<Long> existing = jdbc.queryForList(
-                """
-                SELECT id
-                FROM promotions
-                WHERE product_id = ?
-                  AND store_id = ?
-                  AND promo_type = ?
-                  AND start_date = ?
-                  AND end_date = ?
-                ORDER BY id
-                LIMIT 1
-                """,
-                Long.class,
-                productId,
-                storeId,
-                promoType,
-                Date.valueOf(start),
-                Date.valueOf(end)
-        );
-
-        if (!existing.isEmpty()) {
-
-            jdbc.update(
-                    """
-                    UPDATE promotions
-                    SET promo_price = ?,
-                        min_quantity = ?,
-                        description = ?,
-                        status = ?
-                    WHERE id = ?
-                    """,
-                    price,
-                    minimumQuantity,
-                    description,
-                    status,
-                    existing.get(0)
-            );
-
-            return true;
-        }
-
-        return jdbc.update(
-                """
-                INSERT INTO promotions (
-                    product_id,
-                    store_id,
-                    promo_type,
-                    description,
-                    promo_price,
-                    min_quantity,
-                    start_date,
-                    end_date,
-                    status
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                productId,
-                storeId,
-                promoType,
-                description,
-                price,
-                minimumQuantity,
-                Date.valueOf(start),
-                Date.valueOf(end),
-                status
-        ) > 0;
+        String program = member ? "Retailer loyalty card" : null;
+        String sourceKey = productId + ":" + storeId + ":" + promoType + ":" + start + ":" + end + ":" + member;
+        return jdbc.update("""
+                INSERT INTO promotions(product_id,store_id,promo_type,description,promo_price,min_quantity,
+                    start_date,end_date,status,loyalty_program,source_type,source_reference,source_key,verification)
+                VALUES (?,?,?,?,?,?,?,?,'PENDING',?,'REEFAPI',?,?, 'ADVERTISED')
+                ON CONFLICT (source_type,source_key) DO UPDATE SET
+                  description=excluded.description,promo_price=excluded.promo_price,
+                  min_quantity=excluded.min_quantity,loyalty_program=excluded.loyalty_program,
+                  status='PENDING',collected_at=now(),updated_at=now(),revision=promotions.revision+1
+                WHERE promotions.status NOT IN ('REJECTED','SUSPENDED')
+                  AND (promotions.description,promotions.promo_price,promotions.min_quantity,promotions.loyalty_program)
+                      IS DISTINCT FROM (excluded.description,excluded.promo_price,excluded.min_quantity,excluded.loyalty_program)
+                """,productId,storeId,promoType,description,price,minimumQuantity,Date.valueOf(start),
+                Date.valueOf(end),program,"ReefAPI matched branch " + storeId,sourceKey) > 0 ? ImportOutcome.SAVED : ImportOutcome.UNCHANGED;
     }
+
+    private enum ImportOutcome { SAVED,UNCHANGED,SKIPPED }
 
     private LocalDate parseDate(Object value) {
         String text = stringValue(value);

@@ -21,6 +21,8 @@ import Dashboard from './pages/Dashboard';
 import Discover from './pages/Discover';
 import ShoppingLists from './pages/ShoppingLists';
 import Optimizer from './pages/Optimizer';
+import Specials from './pages/Specials';
+import SpecialsAdmin from './pages/SpecialsAdmin';
 import Budgets from './pages/Budgets';
 import AppLayout from './components/layout/AppLayout';
 import Admin from './pages/Admin';
@@ -269,6 +271,8 @@ function SignedInApp({
           }
         >
           <Routes>
+            <Route path="/specials" element={<Specials token={token} lists={lists} location={location}
+              onLocationChange={changeLocation} radius={radius} onRadiusChange={setRadius} onAddItem={addToCart} />} />
             <Route path="/budgets" element={<Budgets token={token} lists={lists} location={location} radius={radius} />} />
             <Route
               path="/"
@@ -306,6 +310,7 @@ function SignedInApp({
                 location={location} onLocationChange={changeLocation} radius={radius} />}
             />
 
+            <Route path="/admin/specials" element={user.role === 'ADMIN' ? <SpecialsAdmin token={token} /> : <Navigate to="/" replace />} />
             <Route
               path="/admin"
               element={

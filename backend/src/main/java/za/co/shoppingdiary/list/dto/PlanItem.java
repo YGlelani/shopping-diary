@@ -13,6 +13,9 @@ public class PlanItem {
     @lombok.Getter @lombok.Setter private String sourceType;
     @lombok.Getter @lombok.Setter private java.time.LocalDate promotionEndsOn;
     @lombok.Getter @lombok.Setter private String priceType;
+    @lombok.Getter @lombok.Setter private Long promotionId;
+    @lombok.Getter @lombok.Setter private String promotionTerms;
+    @lombok.Getter @lombok.Setter private BigDecimal shelfLineTotal;
     @lombok.Getter @lombok.Setter private BigDecimal exactLineTotal;
 
     @lombok.Getter @lombok.Setter private String substitutedFor;

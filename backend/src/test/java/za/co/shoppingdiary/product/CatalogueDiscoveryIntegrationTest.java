@@ -725,6 +725,149 @@ class CatalogueDiscoveryIntegrationTest {
                 .andExpect(jsonPath("$.recommendation.knownCost").doesNotExist());
     }
 
+    @Test
+    void sharesPromotionTotalsAcrossDiscoveryListsBudgetsAndOptimisation() throws Exception {
+        String buyer = register("specials-buyer@example.test");
+        String outsider = register("specials-other@example.test");
+        String id = newList(buyer,"Specials basket");
+        String list = "/api/v1/lists/" + id;
+        var today = java.time.LocalDate.now(java.time.ZoneId.of("Africa/Johannesburg"));
+        observe("CURRENT_TIMESTAMP - interval '5 minutes'",30,null,"IN_STOCK","VERIFIED","specials-shelf");
+        long deal = jdbc.queryForObject("""
+            INSERT INTO promotions(product_id,store_id,promo_type,title,promo_price,min_quantity,start_date,end_date,status)
+            VALUES (?,?,'MULTIBUY','Bread two-pack',50,2,?,?,'SCHEDULED') RETURNING id
+            """,Long.class,breadId,storeId,today.minusDays(1),today);
+        jdbc.update("""
+            INSERT INTO promotions(product_id,store_id,promo_type,title,promo_price,min_quantity,start_date,end_date,status)
+            VALUES (?,?,'DISCOUNT','Tomorrow',1,1,?,?,'SCHEDULED'),(?,?,'DISCOUNT','Expired',1,1,?,?,'ACTIVE')
+            """,breadId,storeId,today.plusDays(1),today.plusDays(5),breadId,storeId,today.minusDays(4),today.minusDays(1));
+        mvc.perform(get("/api/v1/specials").param("lat","-26").param("lon","28").param("q","Sasko 700 g").param("sort","PRICE"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(deal)).andExpect(jsonPath("$[0].qualification").value("QUANTITY_REQUIRED"))
+                .andExpect(jsonPath("$[0].saving").doesNotExist());
+        mvc.perform(get("/api/v1/specials").param("lat","-33").param("lon","18").param("q","Sasko"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/v1/specials/" + deal).param("quantity","2"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.offeredTotal").value(50))
+                .andExpect(jsonPath("$.shelfTotal").value(60)).andExpect(jsonPath("$.saving").value(10));
+        mvc.perform(post(list+"/items").header("Authorization",buyer).contentType("application/json")
+                .content(json.writeValueAsString(java.util.Map.of("productId",breadId,"quantity",1)))).andExpect(status().isCreated());
+        mvc.perform(get(list+"/specials").header("Authorization", outsider)).andExpect(status().isNotFound());
+        mvc.perform(get(list+"/specials").header("Authorization",buyer)).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].qualification").value("QUANTITY_REQUIRED"));
+        var state = detail(list,buyer);
+        long item = state.path("items").get(0).path("id").asLong();
+        mvc.perform(put(list+"/items/"+item).param("revision",state.path("revision").asText())
+                .header("Authorization",buyer).contentType("application/json").content(json.writeValueAsString(java.util.Map.of("productId",breadId,"quantity",2))))
+                .andExpect(status().isOk());
+        mvc.perform(get(list+"/specials").header("Authorization",buyer)).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].qualification").value("QUALIFIES")).andExpect(jsonPath("$[0].quantity").value(2));
+        mvc.perform(get("/api/v1/products/"+breadId+"/prices").param("lat","-26").param("lon","28").param("quantity","2"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].totalPrice").value(50));
+        mvc.perform(get(list+"/estimate").header("Authorization",buyer).param("lat","-26").param("lon","28"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].total").value(50));
+        String budget = budgetPost("/api/v1/budgets",buyer,
+                """
+                {"name":"Specials trip","amount":55,"period":"TRIP","startsOn":"%s","listIds":[%s]}
+                """.formatted(today,id),java.util.UUID.randomUUID().toString());
+        var budgetQuote = get("/api/v1/budgets/"+budget+"/estimate").header("Authorization",buyer).param("lat","-26").param("lon","28");
+        mvc.perform(budgetQuote).andExpect(status().isOk()).andExpect(jsonPath("$.assessment.knownSubtotal").value(50));
+        var trip = json.createObjectNode().put("lat",-26).put("lon",28).put("travelMode","WALK").put("budgetId",Long.parseLong(budget));
+        mvc.perform(post(list+"/optimize").header("Authorization",buyer).contentType("application/json").content(trip.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.recommendation.grandTotal").value(50))
+                .andExpect(jsonPath("$.recommendation.items[0].promotionId").value(deal));
+        mvc.perform(post(list+"/optimize").header("Authorization",buyer).contentType("application/json")
+                .content(trip.put("ignorePromotions",true).toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.recommendation.grandTotal").value(60));
+        jdbc.update("UPDATE promotions SET status='EXPIRED' WHERE id=?",deal);
+        mvc.perform(budgetQuote).andExpect(status().isOk()).andExpect(jsonPath("$.assessment.knownSubtotal").value(60))
+                .andExpect(jsonPath("$.assessment.status").value("OVER_BUDGET"));
+    }
+
+    @Test
+    void moderatesNationalPromotionsAndEnforcesLoyaltyConfirmation() throws Exception {
+        String buyer = register("specials-admin@example.test");
+        long adminId = jdbc.queryForObject("SELECT id FROM users WHERE email='specials-admin@example.test'",Long.class);
+        var admin = new User();
+        admin.setId(adminId); admin.setEmail("specials-admin@example.test");
+        admin.setDisplayName("Promotion Admin"); admin.setRole(Role.ADMIN);
+        String token = "Bearer " + jwt.issue(admin);
+        var today = java.time.LocalDate.now(java.time.ZoneId.of("Africa/Johannesburg"));
+        long distant = addBranch("Distant Checkers","checkers",30.0);
+        long retailer = jdbc.queryForObject("SELECT retailer_id FROM stores WHERE id=?",Long.class,storeId);
+        jdbc.update("""
+            INSERT INTO price_observations(product_id,store_id,shelf_price,source_type,stock_status,verification_status,content_hash)
+            VALUES (?,?,30,'MANUAL','IN_STOCK','VERIFIED','specials-member-shelf')
+            """,breadId,distant);
+        String body = """
+            {"productId":%d,"storeId":%d,"kind":"MEMBER","scope":"NATIONAL","title":"Member bread","description":"Loyalty card required",
+             "loyaltyProgram":"Confirmed Checkers programme","price":18,"minimumQuantity":1,"startsOn":"%s","endsOn":"%s",
+             "verification":"VERIFIED","sourceReference":"https://example.test/brochure"}
+            """.formatted(breadId,storeId,today,today.plusDays(2));
+        String adminPath = "/api/v1/admin/specials";
+        mvc.perform(post(adminPath).header("Authorization",buyer).contentType("application/json").content(body))
+                .andExpect(status().isForbidden());
+        var saved = mvc.perform(post(adminPath).header("Authorization",token).contentType("application/json").content(body))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        long deal = json.readTree(saved).path("id").asLong();
+        mvc.perform(get("/api/v1/specials/"+deal)).andExpect(status().isNotFound());
+        mvc.perform(get(adminPath).param("validity","PENDING").header("Authorization",token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].validity").value("PENDING"));
+        mvc.perform(post(adminPath+"/"+deal+"/review").header("Authorization",token).contentType("application/json")
+                .content(json.writeValueAsString(java.util.Map.of("status","ACTIVE","revision",0)))).andExpect(status().isNoContent());
+        mvc.perform(get("/api/v1/specials").param("lat","-26").param("lon","30").param("branchId",String.valueOf(distant)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].scope").value("NATIONAL"))
+                .andExpect(jsonPath("$[0].qualification").value("LOYALTY_REQUIRED"));
+        mvc.perform(get("/api/v1/specials/"+deal).param("branchId",String.valueOf(distant)).param("memberConfirmed","true"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.saving").value(12));
+        String path="/api/v1/lists/"+newList(buyer,"Member basket");
+        mvc.perform(post(path+"/items").header("Authorization",buyer).contentType("application/json")
+                .content(json.writeValueAsString(java.util.Map.of("productId",breadId,"quantity",1)))).andExpect(status().isCreated());
+        var trip=json.createObjectNode().put("lat",-26).put("lon",30).put("travelMode","WALK");
+        mvc.perform(post(path+"/optimize").header("Authorization",buyer).contentType("application/json").content(trip.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.recommendation.grandTotal").value(30));
+        trip.putArray("confirmedLoyaltyRetailers").add(retailer);
+        mvc.perform(post(path+"/optimize").header("Authorization",buyer).contentType("application/json")
+                .content(trip.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.recommendation.grandTotal").value(18));
+        mvc.perform(get(adminPath+"/"+deal+"/audit").header("Authorization",token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].actorId").value(adminId)).andExpect(jsonPath("$[0].action").value("ACTIVE"));
+        mvc.perform(post("/api/v1/admin/ingest/reefapi/promotions").param("retailerSlug","picknpay")
+                .header("Authorization",token)).andExpect(status().isServiceUnavailable());
+        mvc.perform(get(adminPath+"/imports").header("Authorization",token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].status").value("FAILED"));
+        mvc.perform(get("/api/v1/specials/coverage")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(20)));
+    }
+
+    @Test
+    void calculatesPromotionRulesWithoutStackingAndRejectsUnqualifiedConditions() {
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("""
+            SELECT promotion_quantity_total('PERCENT',49.99,3,NULL,1,20,NULL,NULL,false)
+            """,java.math.BigDecimal.class)).isEqualByComparingTo("119.97");
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("""
+            SELECT promotion_quantity_total('BOGOF',30,7,NULL,2,NULL,1,NULL,false)
+            """,java.math.BigDecimal.class)).isEqualByComparingTo("150.00");
+        for (String sql : new String[]{
+                "SELECT promotion_quantity_total('BOGOF',30,2,NULL,2,NULL,1,NULL,false)",
+                "SELECT promotion_quantity_total('MULTIBUY',30,1,50,2,NULL,NULL,NULL,false)",
+                "SELECT promotion_quantity_total('PERCENT',NULL,2,NULL,1,10,NULL,NULL,false)",
+                "SELECT promotion_quantity_total('COUPON',30,2,2,1,NULL,NULL,NULL,true)",
+                "SELECT promotion_quantity_total('BUNDLE',30,2,20,1,NULL,NULL,NULL,true)"}) {
+            org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(sql,java.math.BigDecimal.class)).isNull();
+        }
+        observe("CURRENT_TIMESTAMP - interval '5 minutes'",30,null,"IN_STOCK","VERIFIED","specials-overlap");
+        jdbc.update("""
+            INSERT INTO promotions(product_id,store_id,promo_type,promo_price,min_quantity,start_date,end_date,status)
+            VALUES (?,?,'MULTIBUY',50,2,CURRENT_DATE-1,CURRENT_DATE+1,'ACTIVE'),
+                   (?,?,'DISCOUNT',24,1,CURRENT_DATE-1,CURRENT_DATE+1,'ACTIVE')
+            """,breadId,storeId,breadId,storeId);
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("SELECT total FROM branch_quantity_quote(?,?,7,3)",
+                java.math.BigDecimal.class,breadId,storeId)).isEqualByComparingTo("72.00");
+    }
+
+
     private String budgetPost(String path, String token, String body, String key) throws Exception {
         return json.readTree(mvc.perform(post(path).header("Authorization", token).header("Idempotency-Key", key)
                 .contentType("application/json").content(body)).andExpect(status().isCreated())

@@ -11,6 +11,7 @@ import java.sql.Types;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -27,6 +28,14 @@ public class ShoppingEstimateService {
 
     public List<Line> estimate(long owner, List<Long> listIds, Double lat, Double lon, double radius,
                                Long branchId, boolean usePreferredLocation) {
+        return estimate(owner,listIds,lat,lon,radius,branchId,usePreferredLocation,Set.of());
+    }
+
+    public List<Line> estimate(long owner,List<Long> listIds,Double lat,Double lon,double radius,
+                               Long branchId,boolean usePreferredLocation,Set<Long> loyaltyRetailers) {
+        if (loyaltyRetailers.size()>250 || loyaltyRetailers.stream().anyMatch(id -> id==null || id<=0)) {
+            throw new IllegalArgumentException("Invalid confirmed loyalty retailers");
+        }
         if ((lat == null) != (lon == null) || (lat != null && (!Double.isFinite(lat) || !Double.isFinite(lon)
                 || Math.abs(lat) > 90 || Math.abs(lon) > 180))
                 || !Double.isFinite(radius) || radius <= 0 || radius > 100
@@ -37,7 +46,8 @@ public class ShoppingEstimateService {
         var parameters = new MapSqlParameterSource("owner", owner).addValue("lists", listIds)
                 .addValue("lat", lat, Types.DOUBLE).addValue("lon", lon, Types.DOUBLE)
                 .addValue("branch", branchId, Types.BIGINT).addValue("preferred", usePreferredLocation)
-                .addValue("radius", radius * 1000).addValue("age", maxAgeDays);
+                .addValue("radius", radius * 1000).addValue("age", maxAgeDays)
+                .addValue("loyalty",loyaltyRetailers.isEmpty() ? Set.of(-1L) : loyaltyRetailers);
 
         return jdbc.sql("""
             WITH owned AS MATERIALIZED (
@@ -47,7 +57,7 @@ public class ShoppingEstimateService {
                 FROM shopping_lists l WHERE l.id IN (:lists) AND l.user_id = :owner
             ),
             eligible_stores AS MATERIALIZED (
-                SELECT l.id AS list_id, s.id, s.name
+                SELECT l.id AS list_id, s.id, s.name,s.retailer_id
                 FROM owned l CROSS JOIN stores s JOIN retailers r ON r.id = s.retailer_id
                 WHERE s.active AND r.active AND upper(s.store_code) IS DISTINCT FROM 'ONLINE'
                   AND ((:branch IS NOT NULL AND s.id = :branch
@@ -56,16 +66,16 @@ public class ShoppingEstimateService {
             ),
             best AS (
                 SELECT DISTINCT ON (li.id) li.id AS item_id, s.id AS store_id, s.name AS store_name,
-                       offer.product_id, offer.product_name, offer.total
+                       offer.product_id, offer.product_name, offer.total, offer.promotion_ends_on
                 FROM shopping_list_items li JOIN eligible_stores s ON s.list_id = li.list_id
-                CROSS JOIN LATERAL shopping_list_item_offer(li, s.id, :age) offer
+                CROSS JOIN LATERAL shopping_list_item_quote(li, s.id, :age,s.retailer_id IN (:loyalty)) offer
                 WHERE li.product_id IS NOT NULL
                 ORDER BY li.id, offer.total, (offer.product_id = li.product_id) DESC, s.id
             )
             SELECT li.list_id, li.id AS item_id, coalesce(p.canonical_name,li.free_text) AS requested_name,
                    li.quantity, best.product_id, best.product_name, best.store_id, best.store_name, best.total,
                    observed.observed_at, observed.source_type, observed.verification_status,
-                   promotion.ends_on AS promotion_ends_on,
+                   best.promotion_ends_on,
                    CASE WHEN best.total IS NOT NULL THEN NULL
                         WHEN li.product_id IS NULL THEN 'UNLINKED'
                         WHEN history.has_stale THEN 'STALE_OBSERVATION'
@@ -73,18 +83,7 @@ public class ShoppingEstimateService {
             FROM owned l JOIN shopping_list_items li ON li.list_id = l.id
             LEFT JOIN products p ON p.id = li.product_id
             LEFT JOIN best ON best.item_id = li.id
-            LEFT JOIN LATERAL current_branch_price(best.product_id,best.store_id,:age) observed ON best.product_id IS NOT NULL
-            LEFT JOIN LATERAL (
-                SELECT min(pr.end_date) AS ends_on
-                FROM current_branch_promotions pr
-                WHERE pr.product_id = best.product_id AND pr.store_id = best.store_id
-                  AND ((pr.promo_type = 'DISCOUNT' AND coalesce(pr.min_quantity,1) = 1
-                        AND pr.promo_price = observed.effective_price)
-                    OR (pr.promo_type = 'MULTIBUY' AND li.quantity >= pr.min_quantity
-                        AND round(pr.promo_price * trunc(li.quantity / pr.min_quantity)
-                            + observed.effective_price * mod(li.quantity,pr.min_quantity),2) = best.total
-                        AND best.total < round(li.quantity * observed.effective_price,2)))
-            ) promotion ON TRUE
+            LEFT JOIN LATERAL eligible_branch_observation(best.product_id,best.store_id,:age) observed ON best.product_id IS NOT NULL
             LEFT JOIN LATERAL (
                 SELECT bool_or(latest.observed_at < CURRENT_TIMESTAMP - make_interval(days =>
                     least(:age, CASE WHEN latest.source_type IN ('COMMUNITY','RECEIPT','BROCHURE') THEN 3 ELSE :age END)))

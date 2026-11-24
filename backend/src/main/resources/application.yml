@@ -64,6 +64,9 @@ app:
     admin-password: ${BOOTSTRAP_ADMIN_PASSWORD:}
 
 shopping-diary:
+  promotions:
+    reef-enabled: ${SPECIALS_REEF_IMPORT_ENABLED:false}
+    reef-cron: "${SPECIALS_REEF_IMPORT_CRON:0 25 5 * * *}"
   prices:
     max-age-days: ${PRICE_MAX_AGE_DAYS:7}
 

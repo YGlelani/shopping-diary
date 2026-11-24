@@ -147,6 +147,7 @@ export default function Budgets({ token, lists, location, radius }) {
   const sourceList = lists.find(row => String(row.id) === params.get('listId'));
   const [page, setPage] = useState(0);
   const [expensePage, setExpensePage] = useState(0);
+  const [loyalty, setLoyalty] = useState([]);
   const [branch, setBranch] = useState({ scope: '', id: '' });
   const [editor, setEditor] = useState(null);
   const [purchase, setPurchase] = useState(null);
@@ -170,6 +171,8 @@ export default function Budgets({ token, lists, location, radius }) {
   const branchId = branch.scope === scope ? branch.id : '';
   const branches = useResource(location && '/stores/nearby?' + coordinates + '&limit=100', token);
   const branchRows = branches.data ?? [];
+  const retailers = useResource('/retailers', token);
+  loyalty.forEach(id => coordinates.append('loyaltyRetailer', id));
   if (branchId) coordinates.set('branchId', branchId);
   const estimateQuery = coordinates.toString();
   coordinates.set('refresh', [budget?.revision, tick, ...linked.map(row => row.revision)].join('-'));
@@ -296,11 +299,20 @@ export default function Budgets({ token, lists, location, radius }) {
         {!archived && <>
           <p className="text-sm text-gray-600">Estimates cover the full linked lists at their saved locations or your current shopping location. Prices across branches may require multiple trips.</p>
           <div className="grid items-end gap-3 sm:grid-cols-2">
+            {linked.length > 0 && <Link className={link} to={'/specials?listId=' + linked[0].id}>Check applicable specials</Link>}
             <Link className={link} to="/stores" state={{ returnTo: '/budgets?id=' + id }}>{location ? 'Change shopping location' : 'Choose a shopping location'}</Link>
             {location && <label className="text-sm">Estimate for a branch<select className={select} value={branchId} onChange={event => setBranch({ scope, id: event.target.value })}>
               <option value="">Best eligible price per item</option>{branchRows.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}
             </select></label>}
           </div>
+          <details><summary className="cursor-pointer text-sm font-medium">Confirm loyalty eligibility</summary>
+            <fieldset className="mt-2 grid gap-2 sm:grid-cols-3">
+              <legend className="text-sm">I have the required loyalty card for</legend>
+              {retailers.data?.filter(row => row.active).map(row => <label className="flex gap-2 text-sm" key={row.id}><input type="checkbox"
+                checked={loyalty.includes(row.id)} onChange={event => setLoyalty(event.target.checked ? [...loyalty, row.id] : loyalty.filter(id => id !== row.id))} />
+                {row.name}</label>)}
+            </fieldset>
+          </details>
           {location && branches.error && <RequestStatus resource={branches} />}
         </>}
         <Estimate resource={quote} lists={lists} archived={archived} />

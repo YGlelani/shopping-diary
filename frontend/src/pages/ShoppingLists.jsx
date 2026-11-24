@@ -256,6 +256,7 @@ function ListDetail({ list, token, activeLocation, radius, busy, run, onRemember
         {quantities.size > 0 && <p className="text-sm text-gray-600">{[...quantities].map(([unit, quantity]) => quantity / 1000 + ' ' + unit).join(' · ')}</p>}
       </div>
       <Link className="text-sm text-emerald-800 underline" to="/optimize" onClick={onPlan}>Plan remaining basket</Link>
+      <Link className="text-sm text-emerald-800 underline" to={'/specials?listId=' + list.id}>See specials for this list</Link>
       <Link className="text-sm text-emerald-800 underline" to={'/budgets?listId=' + list.id}>Create a budget for this list</Link>
     </div>
     <details><summary className="cursor-pointer text-sm font-medium">Edit list details</summary>

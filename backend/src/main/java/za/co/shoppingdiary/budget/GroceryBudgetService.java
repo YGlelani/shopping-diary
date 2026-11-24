@@ -145,11 +145,11 @@ public class GroceryBudgetService {
     }
 
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public Estimate estimate(long owner,long id,Double lat,Double lon,double radius,Long branch) {
-        return estimate(owned(owner,id,false),owner,lat,lon,radius,branch);
+    public Estimate estimate(long owner,long id,Double lat,Double lon,double radius,Long branch,Set<Long> loyalty) {
+        return estimate(owned(owner,id,false),owner,lat,lon,radius,branch,loyalty);
     }
 
-    private Estimate estimate(Budget budget,long owner,Double lat,Double lon,double radius,Long branch) {
+    private Estimate estimate(Budget budget,long owner,Double lat,Double lon,double radius,Long branch,Set<Long> loyalty) {
         if ("ARCHIVED".equals(budget.status())) {
             if (budget.snapshotAt() == null) return new Estimate(null,List.of(),null,null,false,true,null);
             boolean single = Boolean.TRUE.equals(budget.snapshotSingleBranch());
@@ -157,7 +157,7 @@ public class GroceryBudgetService {
                     budget.snapshotEntries(),budget.snapshotPriced(),single);
             return new Estimate(assessment,List.of(),budget.snapshotAt(),null,single,true,recordedDifference(budget.id(),assessment));
         }
-        var lines = estimates.estimate(owner,links(budget.id()),lat,lon,radius,branch,true);
+        var lines = estimates.estimate(owner,links(budget.id()),lat,lon,radius,branch,true,loyalty);
         var priced = lines.stream().filter(line -> line.total() != null).toList();
         var subtotal = priced.stream().map(Line::total).reduce(BigDecimal.ZERO,BigDecimal::add);
         boolean single = !priced.isEmpty() && priced.stream().map(Line::storeId).distinct().count() == 1;
@@ -172,11 +172,11 @@ public class GroceryBudgetService {
     }
 
     @Transactional
-    public void archive(long owner,long id,long revision,Double lat,Double lon,double radius,Long branch) {
+    public void archive(long owner,long id,long revision,Double lat,Double lon,double radius,Long branch,Set<Long> loyalty) {
         var budget = owned(owner,id,true);
         checkRevision(budget.revision(),revision);
         active(budget);
-        var quote = estimate(budget,owner,lat,lon,radius,branch);
+        var quote = estimate(budget,owner,lat,lon,radius,branch,loyalty);
         var assessment = quote.assessment();
         jdbc.sql("""
             UPDATE grocery_budgets SET status='ARCHIVED',snapshot_subtotal=:subtotal,snapshot_entries=:entries,

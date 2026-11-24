@@ -5,7 +5,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import za.co.shoppingdiary.ingestion.api.service.HdxDownloadService;
 import za.co.shoppingdiary.ingestion.api.service.LoyaltyHubService;
-import za.co.shoppingdiary.ingestion.api.service.ReefApiService;
+import za.co.shoppingdiary.promotion.SpecialsImportService;
 
 import java.util.Map;
 
@@ -15,7 +15,7 @@ import java.util.Map;
 public class IngestionController {
 
     private final LoyaltyHubService loyaltyHubService;
-    private final ReefApiService reefApiService;
+    private final SpecialsImportService specialsImport;
     private final HdxDownloadService hdxDownloadService;
 
     @PostMapping("/loyaltyhub")
@@ -35,7 +35,7 @@ public class IngestionController {
             @RequestParam String retailerSlug,
             @RequestParam(required = false) String storeCode
     ) {
-        return reefApiService.syncPromotions(
+        return specialsImport.collect(
                 retailerSlug,
                 storeCode
         );

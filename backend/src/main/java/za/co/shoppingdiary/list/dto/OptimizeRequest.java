@@ -26,6 +26,8 @@ public class OptimizeRequest {
     @Min(1) @Max(3) private int maxStores = 2;
     @NotNull private TravelMode travelMode = TravelMode.UNKNOWN;
     private boolean allowAlternatives = true;
+    private boolean ignorePromotions;
+    @NotNull @Size(max=250) private Set<@NotNull @Positive Long> confirmedLoyaltyRetailers = Set.of();
     @NotNull @Size(max=250) private Set<@NotNull @Positive Long> excludedRetailers = Set.of();
     @Positive private Long preferredRetailer;
     @NotNull @Size(max=1000) private Set<@NotNull @Positive Long> rejectedAlternatives = Set.of();
