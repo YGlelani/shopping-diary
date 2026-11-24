@@ -1,10 +1,10 @@
+import GroceryAutomationPanel from '../components/admin/GroceryAutomationPanel';
 import RetailDirectoryPanel from '../components/admin/RetailDirectoryPanel';
 
 import { useState } from 'react';
 
 import {
   UploadCloud,
-  RefreshCw,
   Database,
   Tag,
 } from 'lucide-react';
@@ -25,12 +25,6 @@ export default function Admin({ token }) {
 
   const [csvFile, setCsvFile] = useState(null);
   const [uploadStatus, setUploadStatus] = useState('');
-
-  const [loyaltyQuery, setLoyaltyQuery] =
-    useState('milk');
-
-  const [loyaltyStatus, setLoyaltyStatus] =
-    useState('');
 
   const [hdxStatus, setHdxStatus] = useState('');
 
@@ -130,21 +124,6 @@ export default function Admin({ token }) {
     }
   }
 
-  function syncLoyaltyHub() {
-    const query = loyaltyQuery.trim();
-
-    if (!query) {
-      setLoyaltyStatus('Enter a search query.');
-      return;
-    }
-
-    runSync(
-      `/admin/ingest/loyaltyhub?query=${encodeURIComponent(query)}`,
-      'loyalty',
-      setLoyaltyStatus
-    );
-  }
-
   function syncHdx() {
     runSync(
       '/admin/ingest/hdx/trigger',
@@ -198,10 +177,10 @@ export default function Admin({ token }) {
 
       <RetailDirectoryPanel token={token} />
 
+      <GroceryAutomationPanel token={token} />
+
       {/* Catalogue manager appears locally only */}
-      {import.meta.env.DEV && (
-        <OpenFoodFactsPanel token={token} />
-      )}
+      {import.meta.env.DEV && <OpenFoodFactsPanel token={token} />}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
@@ -250,49 +229,7 @@ export default function Admin({ token }) {
           </CardContent>
         </Card>
 
-        {/* LoyaltyHub */}
-        <Card>
-          <CardHeader>
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <RefreshCw size={18} />
-              LoyaltyHub Sync
-            </h2>
-          </CardHeader>
 
-          <CardContent className="space-y-4">
-            <p className="text-sm text-gray-500">
-              Import available grocery price
-              observations from LoyaltyHub.
-            </p>
-
-            <Input
-              value={loyaltyQuery}
-              onChange={event =>
-                setLoyaltyQuery(event.target.value)
-              }
-              placeholder="Search term, e.g. milk"
-            />
-
-            <Button
-              type="button"
-              disabled={Boolean(busy)}
-              onClick={syncLoyaltyHub}
-            >
-              {busy === 'loyalty'
-                ? 'Syncing...'
-                : 'Sync Prices'}
-            </Button>
-
-            {loyaltyStatus && (
-              <p
-                role="status"
-                className="text-sm text-gray-700"
-              >
-                {loyaltyStatus}
-              </p>
-            )}
-          </CardContent>
-        </Card>
 
         {/* Historical Data */}
         <Card>

@@ -84,6 +84,7 @@ function Details({ id, location, token, onAddItem }) {
         {store.phone && <a className="block text-sm underline" href={'tel:' + store.phone}>{store.phone}</a>}
         <div className="flex flex-wrap items-center gap-3">
           <Directions store={store} />
+          {store.sourceUrl?.startsWith('https://www.openstreetmap.org/') && <a className="text-sm underline" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">&copy; OpenStreetMap contributors</a>}
           {store.sourceUrl && <a className="text-sm underline" href={store.sourceUrl} target="_blank" rel="noreferrer">Branch information source</a>}
           <Button variant="secondary" aria-expanded={mapVisible} onClick={() => setMapVisible(value => !value)}>
             {mapVisible ? 'Hide branch map' : 'Show branch map'}

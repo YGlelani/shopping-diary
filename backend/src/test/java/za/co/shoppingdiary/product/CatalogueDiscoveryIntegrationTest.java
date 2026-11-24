@@ -57,6 +57,9 @@ class CatalogueDiscoveryIntegrationTest {
     @Autowired JwtService jwt;
     @Autowired SampleRetailerScraper scraper;
     @Autowired CsvImportService csv;
+    @Autowired za.co.shoppingdiary.ingestion.automation.ScopedPriceIntake intake;
+    @Autowired za.co.shoppingdiary.ingestion.automation.LoyaltyHubQuota freeQuota;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
     private final ObjectMapper json = new ObjectMapper();
     private MockMvc mvc;
     private long breadId;
@@ -865,6 +868,109 @@ class CatalogueDiscoveryIntegrationTest {
             """,breadId,storeId,breadId,storeId);
         org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("SELECT total FROM branch_quantity_quote(?,?,7,3)",
                 java.math.BigDecimal.class,breadId,storeId)).isEqualByComparingTo("72.00");
+    }
+
+
+    @Test
+    void dryRunsAndDeduplicatesCatalogueAndOsmExports() throws Exception {
+        String ordinary = register("automated-import-admin@example.test");
+        long adminId = jdbc.queryForObject("SELECT id FROM users WHERE email=?",Long.class,"automated-import-admin@example.test");
+        var admin=new User();
+        admin.setId(adminId); admin.setEmail("automated-import-admin@example.test");
+        admin.setDisplayName("Import Admin"); admin.setRole(Role.ADMIN);
+        String authorized="Bearer "+jwt.issue(admin);
+        String base="/api/v1/admin/grocery-automation";
+        byte[] source=("""
+            {"code":"6000000009874","product_name":"Catalogue test food","brands":"Fixture","quantity":"1 kg","countries_tags":["en:south-africa"],"categories_tags":["en:rices"]}
+            {"code":"6000000009875","product_name":"Outside scope","countries_tags":["en:france"]}
+            """).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        var export=new MockMultipartFile("file","catalogue.jsonl","application/x-ndjson",source);
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart(base+"/OPEN_FOOD_FACTS/file")
+                .file(export).header("Authorization",ordinary)).andExpect(status().isForbidden());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart(base+"/OPEN_FOOD_FACTS/file")
+                .file(export).header("Authorization",authorized)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.imported").value(1)).andExpect(jsonPath("$.dryRun").value(true));
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM products WHERE barcode='6000000009874'",Integer.class)).isZero();
+        for (int i=0;i<2;i++) {
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart(base+"/OPEN_FOOD_FACTS/file")
+                    .file(export).param("dryRun","false").header("Authorization",authorized)).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.imported").value(1-i));
+        }
+        String xml="""
+            <osm version="0.6">
+              <node id="9000000001" lat="-30.02" lon="27.01">
+                <tag k="shop" v="supermarket"/><tag k="brand" v="Pick n Pay"/><tag k="name" v="Fixture Pick n Pay"/>
+              </node>
+              <node id="9000000002" lat="-30.03" lon="27.02" timestamp="2016-03-01T12:00:00Z">
+                <tag k="shop" v="supermarket"/><tag k="brand" v="Pick n Pay"/><tag k="name" v="Older Fixture"/>
+              </node>
+            </osm>
+            """;
+        var osm=new MockMultipartFile("file","supermarkets.osm","application/xml",xml.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        for (int i=0;i<2;i++) {
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart(base+"/OPEN_STREET_MAP/file")
+                    .file(osm).param("dryRun","false").header("Authorization",authorized)).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.imported").value(2*(1-i)));
+        }
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                "SELECT active FROM stores WHERE osm_type='node' AND osm_id=9000000002",Boolean.class)).isFalse();
+        mvc.perform(get(base).header("Authorization",authorized)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.review[0].reason").value("OSM object has not been edited in five years"));
+        mvc.perform(get("/api/v1/products/search").param("q","6000000009874")).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].canonicalName").value("Catalogue test food"));
+        mvc.perform(get("/api/v1/stores/nearby").param("lat","-30.02").param("lon","27.01").param("r","2").header("Authorization",ordinary))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].name").value("Fixture Pick n Pay"));
+    }
+
+    @Test
+    void savesScopedObservationsWithoutInventingBranchPrices() throws Exception {
+        String token=register("scope-review@example.test");
+        jdbc.update("UPDATE stores SET osm_type='node',osm_id=9000000003 WHERE id=?",storeId);
+        var amount=new java.math.BigDecimal("22.90");
+        var online=new za.co.shoppingdiary.ingestion.automation.PriceDataSource.Price(null,"0012345678901","fixture-700",
+                "Whole Wheat Bread","Sasko","700 g","checkers","ONLINE","online",null,null,amount,amount,null,null,
+                "ZAR",java.time.Instant.now().minusSeconds(3600),null,"https://example.test/grocery",null,null,null);
+        var historical=new za.co.shoppingdiary.ingestion.automation.PriceDataSource.Price("fixture-historic","0012345678901",null,
+                null,null,null,null,"BRANCH","Test Checkers","node",9000000003L,amount,null,null,null,"ZAR",null,
+                java.time.LocalDate.of(2025,8,12),"https://prices.openfoodfacts.org/",null,null,null);
+        for (int i=0;i<2;i++) {
+            intake.accept("LOYALTYHUB",java.util.List.of(online),false);
+            intake.accept("OPEN_PRICES",java.util.List.of(historical),false);
+        }
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM grocery_scoped_prices WHERE product_id=?",Integer.class,breadId)).isEqualTo(2);
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM grocery_scoped_prices WHERE source='LOYALTYHUB' AND branch_id IS NULL AND in_stock IS NULL",
+                Integer.class)).isGreaterThanOrEqualTo(1);
+        prices().andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/v1/scoped-prices/"+breadId).header("Authorization",token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].source").value("OPEN_PRICES")).andExpect(jsonPath("$[0].observedOn").value("2025-08-12"))
+                .andExpect(jsonPath("$[0].observedAt").doesNotExist()).andExpect(jsonPath("$[0].historical").value(true));
+    }
+
+
+    @Test
+    void stopsAtProviderQuotaWithoutWritingPrices() {
+        var quotaState=freeQuota.usage();
+        int observations = jdbc.queryForObject("SELECT count(*) FROM grocery_scoped_prices",Integer.class);
+        try {
+            freeQuota.record(0,0,null,java.time.Instant.now().plusSeconds(3600));
+            org.assertj.core.api.Assertions.assertThatThrownBy(freeQuota::reserve)
+                    .isInstanceOfSatisfying(org.springframework.web.server.ResponseStatusException.class,
+                            failure -> org.assertj.core.api.Assertions.assertThat(failure.getStatusCode().value()).isEqualTo(429));
+            org.assertj.core.api.Assertions.assertThat(freeQuota.usage().localCalls()).isEqualTo(quotaState.localCalls());
+            org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM grocery_scoped_prices",Integer.class)).isEqualTo(observations);
+        } finally {
+            var independent = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+            independent.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+            independent.executeWithoutResult(status -> jdbc.update("""
+                UPDATE loyalty_hub_free_state SET remaining=?,rows_remaining=?,retry_after=?,quota_reset=?,last_checked_at=?
+                WHERE singleton
+                """,quotaState.remaining(),quotaState.rowsRemaining(),quotaState.retryAfter(),quotaState.quotaReset(),quotaState.lastCheckedAt()));
+        }
     }
 
 

@@ -526,9 +526,11 @@ public class OpenFoodFactsService {
     // NORMALIZATION
     // ============================================
 
+    public Candidate exportCandidate(JsonNode node) { return parse(node); }
+
     private Candidate parse(JsonNode node) {
 
-        if (!node.isObject()) {
+        if (node == null || !node.isObject()) {
             return null;
         }
 

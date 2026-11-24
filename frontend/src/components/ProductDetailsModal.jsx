@@ -12,6 +12,8 @@ import { formatObservationDate, formatProductPrice } from '../utils/productForma
 export default function ProductDetailsModal({ product, onClose, lat, lon, radiusKm = 15, token, adding, onAddItem, alternatives = [], onSelectProduct }) {
   const dialog = useRef(null);
   const [history, setHistory] = useState(null);
+  const [scoped, setScoped] = useState(null);
+  const scopedPrices = scoped?.productId === product.productId ? scoped.rows : [];
   const [priceResult, setPriceResult] = useState(null);
   const [filters, setFilters] = useState({ quantity: '1', sort: 'price', retailer: '', verification: '', promotion: '', minPrice: '', maxPrice: '' });
   const [applied, setApplied] = useState(filters);
@@ -53,6 +55,15 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, radius
       .catch(() => {});
     return () => controller.abort();
   }, [product.productId]);
+
+  useEffect(() => {
+    if (!token) return;
+    const controller = new AbortController();
+    apiRequest('/scoped-prices/' + product.productId, { signal: controller.signal }, token)
+      .then(rows => { if (!controller.signal.aborted) setScoped({ productId: product.productId, rows }); })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [product.productId, token]);
 
   useEffect(() => {
     if (!hasLocation) return;
@@ -253,6 +264,20 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, radius
             <Button variant="secondary" disabled={currentPrices.length < 26} onClick={() => setPage(value => value + 1)}>Next</Button>
           </nav>
         )}
+        {scopedPrices.length > 0 && <section className="mb-6 space-y-3 rounded-xl border border-gray-200 p-4">
+          <h3 className="font-semibold">Other price observations</h3>
+          <p className="text-sm text-gray-600">Catalogue prices can differ in store. Historical observations are excluded from current basket estimates.</p>
+          <ul className="divide-y divide-gray-200 text-sm">
+            {scopedPrices.map((offer, index) => <li key={index} className="space-y-1 py-2">
+              <p><strong>{offer.retailer || offer.branchName || 'Observed price'}</strong>{' \u00b7 '}{formatProductPrice(offer.amount)}</p>
+              <p className="text-gray-600">{offer.scope === 'ONLINE' ? 'Online' : offer.scope === 'REGIONAL' ? 'Regional catalogue' : offer.scope === 'CATALOGUE' ? 'Store catalogue' : 'Reported branch observation'}
+                {offer.scopeLabel && offer.scopeLabel !== offer.branchName && ' \u00b7 ' + offer.scopeLabel}{offer.historical && ' \u00b7 Historical'}</p>
+              <p>Observed {formatObservationDate(offer.observedAt || offer.observedOn)}{' \u00b7 '}{offer.inStock == null ? 'Stock unknown' : offer.inStock ? 'Reported in stock' : 'Reported out of stock'}</p>
+              {offer.source === 'LOYALTYHUB' ? <a className="underline" href="https://loyaltyhub.co.za/" target="_blank" rel="noreferrer">Prices via Loyalty Hub</a> :
+                <a className="underline" href={offer.sourceUrl || 'https://prices.openfoodfacts.org/'} target="_blank" rel="noreferrer">Open Prices observation</a>}
+            </li>)}
+          </ul>
+        </section>}
         {hasLocation && token && <PriceContribution productId={product.productId} lat={lat} lon={lon} radiusKm={radiusKm} token={token} />}
 
         {alternatives.length > 0 && (
@@ -279,7 +304,7 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, radius
             ) : history === null ? (
               <div role="status" className="h-48 flex items-center justify-center text-gray-400">Loading chart...</div>
             ) : history.length === 0 ? (
-              <div className="h-48 flex items-center justify-center text-gray-400">No historical observations in the past 180 days.</div>
+              <div className="h-48 flex items-center justify-center text-gray-400">No comparable store-price history in the past 180 days.</div>
             ) : (
               <div className="h-56 w-full">
                 <ResponsiveContainer width="100%" height="100%">

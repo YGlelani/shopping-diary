@@ -260,3 +260,51 @@ The existing LoyaltyHub integration remains a price-observation source. A member
 2. For the browser demo, seed backend/src/test/resources/specials-browser-fixture.sql on discovery_test only. Use API port 18085, Vite localhost:55179 and Chrome CDP port 59227. Run node frontend/scripts/specials-smoke.mjs from the repository root. The fixture advertises a Polokwane multibuy at R42 for two cartons against R48 at shelf. One carton costs R24, and an unconfirmed loyalty offer is excluded.
 3. Back up the database and deploy the Render API first with scheduling disabled. Confirm both migrations, API health, local scope and a qualifying estimate. Deploy the Vercel frontend after staging verification. Enable a provider schedule only after reviewing its configured branch, credentials and quota.
 4. For rollback, disable the import schedule and roll back the frontend. Keep stored offers, audit rows and import history. If the previous API requires Flyway validation, bundle the unchanged migrations in the rollback build. To reverse shared SQL pricing behaviour, add a forward migration restoring the previous function and view definitions. Test that change in staging before release.
+
+## Free grocery data automation
+
+The admin page includes **Free grocery imports** with a dry-run preview, confirmed import, run history, last successful sync, quota information and rows needing review. The existing single-item Open Food Facts tooling remains available. Flyway V25 adds run and quota records, durable price checkpoints, OSM identities, and separately stored scoped price observations.
+
+| Source | Input | Matching and publication |
+| --- | --- | --- |
+| Open Food Facts | Official product JSONL or tab-separated export, optionally gzip compressed | Requires the South Africa country tag and a barcode. Existing barcode records and all price history are preserved. Exact possible matches to unbarcoded products go to review. Images use approved Open Food Facts URLs when supplied. |
+| OpenStreetMap | Geofabrik filtered GeoJSON sequence with type, ID and timestamp, or a small OSM XML or Overpass JSON extract | Requires a named supermarket and a mapped retailer. Deduplicates by OSM type and ID. Nearby ambiguous duplicates go to review. New objects last edited over five years ago remain inactive and are flagged. |
+| Open Prices | Official price and location JSONL gzip exports | Requires ZAR and a South African location. Uses exact barcode and OSM type/ID. Date-only observations retain their original calendar date and unknown stock remains unknown. Historical observations are separate from live branch quotes. |
+| Loyalty Hub | Documented free-tier /prices endpoint | Requires explicit free-tier opt-in and a server-side key. Exact barcode first, then an approved retailer alias with the same brand and package size. Online, regional and single-store catalogue prices stay outside physical branch pricing. |
+
+Source licences and credits are available in the product and branch views and in these references. Open Food Facts database and images have separate licence requirements. Keep Loyalty Hub prices attributed and indicative, and keep its raw data out of exports. [Open Food Facts licences](https://openfoodfacts.github.io/documentation/docs/Product-Opener/api/tutorials/license-be-on-the-legal-side/) · [OpenStreetMap attribution and licence](https://www.openstreetmap.org/copyright) · [Geofabrik South Africa extract](https://download.geofabrik.de/africa/south-africa/index.html) · [Open Prices exports](https://openfoodfacts.github.io/open-prices/guides/data/) · [Loyalty Hub free tier](https://loyaltyhub.co.za/developers) · [Loyalty Hub terms](https://loyaltyhub.co.za/developers/terms)
+
+### Preparing and running imports
+
+On Windows, run scripts/refresh-grocery-exports.ps1 from the repository using the Catalogue, InitialCatalogue, Branches or OpenPrices switches. InitialCatalogue downloads the large official snapshot and is intended for a machine with enough disk and bandwidth. Catalogue fetches the newest available daily delta. If an interval was missed, process the relevant archived deltas or refresh the initial snapshot. Branches uses the free Osmium CLI to filter the Geofabrik extract. The script publishes each file into backend/target/grocery-exports only after a successful download or conversion. On another platform, use the equivalent curl and Osmium commands against the same official sources.
+
+Set the following only for an isolated backend until verification succeeds:
+
+- GROCERY_OFF_EXPORT_FILE points to the initial catalogue first, then the latest prepared delta.
+- GROCERY_OSM_EXTRACT_FILE points to the prepared branches.geojsonseq or another supported export.
+- GROCERY_OPEN_PRICES_FILE and GROCERY_OPEN_PRICES_LOCATIONS_FILE point to the official paired exports.
+- LOYALTYHUB_FREE_TIER_ENABLED defaults to false. Set it only for a confirmed free-tier key, kept in LOYALTYHUB_API_KEY. GROCERY_LOYALTY_QUERY selects the optional scheduled query.
+- GROCERY_AUTOMATION_SCHEDULE_ENABLED defaults to false. GROCERY_AUTOMATION_CRON defaults to 04:15 South African time daily. The Spring scheduler runs only while the application is awake. For free hosting that sleeps, use manual sync while awake or an existing free scheduler within its included quota.
+
+Use the admin page to preview and then import a small file, or trigger the configured server-side import for large exports. The server checks an export fingerprint before repeating a configured bulk import, and price page checkpoints advance only after successful writes. PostgreSQL prevents overlapping runs for the same source. Malformed exports and provider failures roll back their batches and appear in the import history.
+
+Loyalty Hub requests are limited locally to three per rolling day, 100 per 31 days and ten requested rows per call. The client honours provider quota headers and 429 cooldowns. A dry-run network preview consumes quota too. Customer views label observation dates and exclude Loyalty Hub from current views after seven days. Scheduled maintenance removes scoped raw Loyalty Hub records after 30 days. If the account ends, disable LOYALTYHUB_FREE_TIER_ENABLED and use the administrator-only purge endpoint with the confirmation DELETE LOYALTY HUB DATA to remove the scoped feed, review entries, checkpoints and raw fields in its run details.
+
+### Deployment and rollback
+
+Apply V25 on disposable PostGIS or isolated Neon first. Verify exact barcode and scope matching, a dry run, an idempotent second import and provider isolation before enabling scheduling. Deploy the Render API before the Vercel frontend. For rollback, disable the scheduler and free-tier flag, restore the previous application and retain the additive schema and observations. If Flyway validates migrations on the previous build, bundle the unchanged V25 migration in that build.
+
+### Genuine-data verification report
+
+The isolated scheduler processed the Open Food Facts delta openfoodfacts_products_1795415477_1795502375.json.gz, plus two exact Open Food Facts barcode lookups used to match the price demo. A small OSM node batch used the identities referenced by the public Open Prices location export.
+
+| Source | Examined | Imported | Result |
+| --- | ---: | ---: | --- |
+| Open Food Facts | 7,019 | 14 | 7,005 records were outside the import criteria or not suitable for insert. |
+| OpenStreetMap | 3 supermarket records | 3 | Two active branches. The older Woolworths Food record was retained as inactive and flagged. |
+| Open Prices | 7 ZAR records with a South African location | 2 exact matches | Five records still need product or scope review. A further ZAR observation lacked a matching South African location. |
+| Loyalty Hub | 0 live requests | 0 | The disabled provider was recorded as failed and the quota rejection was tested separately. |
+
+Replaying all three sources added zero records. The browser showed Udon Noodles at R44.99, dated 13 October 2026 and scoped to the exact Pick n Pay OSM branch. It is historical and its stock status is unknown. The genuine basket correctly returned no feasible current plan.
+
+The loopback demo uses API port 18086, Vite localhost:55180 and Chrome CDP port 59228. Configure the scheduled files in an isolated database, enable the short demo schedule and bootstrap the synthetic administrator used in frontend/scripts/grocery-import-smoke.mjs. Run that script from the repository root. It writes the report and screenshots into backend/target.
