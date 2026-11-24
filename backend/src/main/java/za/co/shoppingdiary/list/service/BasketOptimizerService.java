@@ -15,9 +15,6 @@ import za.co.shoppingdiary.list.repository.ShoppingListRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.sql.SQLException;
-import java.sql.Timestamp;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 @Service
@@ -95,9 +92,6 @@ public class BasketOptimizerService {
             );
         }
 
-        Instant cutoff = Instant.now()
-                .minus(maxPriceAgeDays, ChronoUnit.DAYS);
-
         List<ShoppingListItem> allItems =
                 items.findByListIdOrderByIdAsc(listId);
 
@@ -138,71 +132,12 @@ public class BasketOptimizerService {
                 JOIN retailers r ON r.id = s.retailer_id
                 WHERE s.active
                   AND r.active
+                  AND s.store_code IS DISTINCT FROM 'ONLINE'
                   AND ST_DWithin(
                       s.location::geography,
                       up.g,
                       :radiusMeters
                   )
-            ),
-            latest_observation AS (
-                SELECT DISTINCT ON (
-                    po.product_id, po.store_id
-                )
-                    po.product_id,
-                    po.store_id,
-                    po.shelf_price,
-                    po.promo_price,
-                    po.observed_at,
-                    po.stock_status,
-                    po.verification_status
-                FROM price_observations po
-                JOIN nearby_stores ns
-                    ON ns.id = po.store_id
-                WHERE po.product_id IN (
-                    SELECT product_id
-                    FROM shopping_list_items
-                    WHERE list_id = :listId
-                      AND product_id IS NOT NULL
-                )
-                ORDER BY
-                    po.product_id,
-                    po.store_id,
-                    po.observed_at DESC,
-                    po.id DESC
-            ),
-            eligible_price AS (
-                SELECT *
-                FROM latest_observation
-                WHERE observed_at >= :cutoff
-                  AND observed_at <= CURRENT_TIMESTAMP
-                  AND stock_status = 'IN_STOCK'
-                  AND verification_status IN (
-                      'VERIFIED', 'UNVERIFIED'
-                  )
-                  AND (
-                      shelf_price > 0
-                      OR promo_price > 0
-                  )
-            ),
-            active_promos AS (
-                SELECT
-                    pr.product_id,
-                    pr.store_id,
-                    pr.promo_price,
-                    pr.promo_type,
-                    CASE
-                        WHEN pr.promo_type = 'DISCOUNT'
-                        THEN 1
-                        ELSE pr.min_quantity
-                    END AS min_quantity
-                FROM promotions pr
-                WHERE pr.status = 'ACTIVE'
-                  AND pr.promo_type IN (
-                      'MULTIBUY', 'DISCOUNT'
-                  )
-                  AND CURRENT_DATE BETWEEN
-                      pr.start_date AND pr.end_date
-                  AND pr.promo_price > 0
             )
             SELECT
                 ns.id AS store_id,
@@ -213,20 +148,16 @@ public class BasketOptimizerService {
                 li.product_id,
                 li.quantity,
                 p.canonical_name AS product_name,
-                ep.shelf_price,
+                ep.effective_price AS shelf_price,
                 ep.promo_price AS regular_promo,
                 ap.promo_price AS promotion_price,
-                ap.min_quantity,
-                ap.promo_type
+                ap.min_quantity
             FROM nearby_stores ns
             CROSS JOIN shopping_list_items li
-            LEFT JOIN eligible_price ep
-                ON ep.store_id = ns.id
-               AND ep.product_id = li.product_id
-            LEFT JOIN active_promos ap
-                ON ap.store_id = ns.id
-               AND ap.product_id = li.product_id
-               AND ep.product_id IS NOT NULL
+            LEFT JOIN LATERAL current_branch_price(li.product_id, ns.id, :maxAgeDays) ep ON TRUE
+            LEFT JOIN current_branch_promotions ap
+                ON ap.store_id = ns.id AND ap.product_id = li.product_id
+               AND ap.promo_type = 'MULTIBUY' AND ep.effective_price IS NOT NULL
             LEFT JOIN products p
                 ON p.id = li.product_id
             WHERE li.list_id = :listId
@@ -242,10 +173,7 @@ public class BasketOptimizerService {
                                 "radiusMeters",
                                 radiusKm * 1000.0
                         )
-                        .addValue(
-                                "cutoff",
-                                Timestamp.from(cutoff)
-                        );
+                        .addValue("maxAgeDays", maxPriceAgeDays);
 
         jdbc.query(sql, params, rs -> {
             while (rs.next()) {
@@ -315,7 +243,6 @@ public class BasketOptimizerService {
 
                 BigDecimal promotion =
                         rs.getBigDecimal("promotion_price");
-                String promoType = rs.getString("promo_type");
 
                 Integer minQuantity = null;
                 Object minQuantityValue =
@@ -323,14 +250,6 @@ public class BasketOptimizerService {
 
                 if (minQuantityValue != null) {
                     minQuantity = rs.getInt("min_quantity");
-                }
-
-                if ("DISCOUNT".equals(promoType)
-                        && isPositive(promotion)) {
-                    regularPromo = minimumPositive(
-                            regularPromo, promotion);
-                    promotion = null;
-                    minQuantity = null;
                 }
 
                 PriceData price = new PriceData(
@@ -500,30 +419,8 @@ public class BasketOptimizerService {
             );
         }
 
-        BigDecimal cost = unitPrice.multiply(quantity);
-
-        if (isPositive(price.multiBuyPromo())
-                && price.minQuantity() != null
-                && price.minQuantity() > 1) {
-
-            BigDecimal bundleSize =
-                    BigDecimal.valueOf(price.minQuantity());
-
-            BigDecimal bundleCount =
-                    quantity.divideToIntegralValue(bundleSize);
-
-            BigDecimal remainder =
-                    quantity.remainder(bundleSize);
-
-            BigDecimal bundleCost =
-                    price.multiBuyPromo()
-                            .multiply(bundleCount)
-                            .add(unitPrice.multiply(remainder));
-
-            cost = cost.min(bundleCost);
-        }
-
-        return cost.setScale(2, RoundingMode.HALF_UP);
+        return za.co.shoppingdiary.price.OfferPricing.total(
+                unitPrice, quantity, price.multiBuyPromo(), price.minQuantity());
     }
 
     private OptimizationPlan buildPlan(

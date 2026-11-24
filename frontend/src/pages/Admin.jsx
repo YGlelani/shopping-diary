@@ -1,3 +1,4 @@
+import RetailDirectoryPanel from '../components/admin/RetailDirectoryPanel';
 
 import { useState } from 'react';
 
@@ -194,6 +195,8 @@ export default function Admin({ token }) {
           data sources.
         </p>
       </div>
+
+      <RetailDirectoryPanel token={token} />
 
       {/* Catalogue manager appears locally only */}
       {import.meta.env.DEV && (
@@ -405,6 +408,14 @@ export default function Admin({ token }) {
               </p>
             )}
 
+            {reefResult?.unmatchedTitles?.length > 0 && (
+              <details className="text-sm">
+                <summary>Retailer product names awaiting a verified alias</summary>
+                <ul className="mt-2 list-disc pl-5">
+                  {reefResult.unmatchedTitles.map(name => <li key={name}>{name}</li>)}
+                </ul>
+              </details>
+            )}
             {reefResult && (
               <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700 space-y-1">
                 <p>

@@ -23,6 +23,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -253,6 +254,7 @@ public class ReefApiService {
         int matchedProducts = 0;
         int savedPromotions = 0;
         int skippedPromotions = 0;
+        var unmatchedTitles = new LinkedHashSet<String>();
 
         LocalDate today = LocalDate.now(
                 SOUTH_AFRICA
@@ -278,6 +280,7 @@ public class ReefApiService {
             );
 
             if (productId == null) {
+                if (unmatchedTitles.size() < 30) unmatchedTitles.add(title.substring(0, Math.min(title.length(), 500)));
                 skippedPromotions++;
                 continue;
             }
@@ -349,7 +352,8 @@ public class ReefApiService {
                 "promotionsSaved",
                 savedPromotions,
                 "promotionsSkipped",
-                skippedPromotions
+                skippedPromotions,
+                "unmatchedTitles", List.copyOf(unmatchedTitles)
         );
     }
 

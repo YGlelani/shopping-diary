@@ -10,22 +10,23 @@ import { apiRequest } from '../api/client';
 
 const ProductDetailsModal = lazy(() => import('../components/ProductDetailsModal'));
 const PAGE_SIZE = 24;
-const RADIUS_KM = 15;
 const selectClass = 'w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm';
 const initialFilters = { q: '', category: '', brand: '', size: '', priced: '' };
 
-export default function Discover({ token, onAddItem, location }) {
+export default function Discover({ token, onAddItem, location, radius, onRadiusChange }) {
   return (
     <DiscoverContent
       key={[location?.lat, location?.lon].join(':')}
       token={token}
       onAddItem={onAddItem}
       location={location}
+      radius={radius}
+      onRadiusChange={onRadiusChange}
     />
   );
 }
 
-function DiscoverContent({ token, onAddItem, location }) {
+function DiscoverContent({ token, onAddItem, location, radius, onRadiusChange }) {
   const [filters, setFilters] = useState(initialFilters);
   const [request, setRequest] = useState({ filters: initialFilters, offset: 0 });
   const [departments, setDepartments] = useState([]);
@@ -48,7 +49,7 @@ function DiscoverContent({ token, onAddItem, location }) {
   useEffect(() => {
     const controller = new AbortController();
     const params = new URLSearchParams({
-      r: RADIUS_KM, limit: PAGE_SIZE + 1, offset: request.offset,
+      r: radius, limit: PAGE_SIZE + 1, offset: request.offset,
     });
     for (const [key, value] of Object.entries(request.filters)) {
       if (value.trim() && (key !== 'priced' || hasLocation)) params.set(key, value.trim());
@@ -67,7 +68,7 @@ function DiscoverContent({ token, onAddItem, location }) {
         if (!controller.signal.aborted) setResponse({ request, error: error.message || 'Search failed. Try again.' });
       });
     return () => controller.abort();
-  }, [request, token, lat, lon, hasLocation]);
+  }, [request, token, lat, lon, hasLocation, radius]);
 
   function updateFilter(event) {
     const { name, value } = event.target;
@@ -137,10 +138,18 @@ function DiscoverContent({ token, onAddItem, location }) {
               </label>
             </div>
           </form>
+          {hasLocation && <label className="mt-3 block text-sm">Search radius
+            <select value={radius} onChange={event => {
+              onRadiusChange(Number(event.target.value));
+              setRequest(current => ({ ...current, offset: 0 }));
+            }} className="ml-2 rounded border p-1">
+              {[5, 10, 15, 25, 50, 100].map(km => <option key={km} value={km}>{km} km</option>)}
+            </select>
+          </label>}
           {categoryError && <p role="status" className="mt-2 text-sm text-gray-600">Department filters could not load.</p>}
           <p className="mt-3 flex items-center gap-2 text-xs text-gray-600">
             <MapPin size={14} aria-hidden="true" />
-            {hasLocation ? 'Prices shown within 15 km of your shopping location.' : (
+            {hasLocation ? 'Prices shown within ' + radius + ' km of your shopping location.' : (
               <Link to="/stores" state={{ returnTo: '/discover' }} className="underline">Select a shopping location to see nearby prices</Link>
             )}
           </p>
@@ -187,7 +196,7 @@ function DiscoverContent({ token, onAddItem, location }) {
               <ProductCredits product={product} />
               <div className="mt-auto flex gap-2">
                 <Button variant="secondary" className="flex-1" onClick={() => setSelectedProduct(product)}
-                  aria-label={'View details for ' + product.canonicalName}>Details</Button>
+                  aria-label={'View details for ' + product.canonicalName}>{product.storeCount ? 'Compare stores' : 'Details'}</Button>
                 <Button className="flex-1" disabled={adding} onClick={() => addProduct(product)}
                   aria-label={'Add ' + product.canonicalName + ' to shopping list'}>
                   <Plus size={14} aria-hidden="true" className="mr-1" /> Add
@@ -210,8 +219,11 @@ function DiscoverContent({ token, onAddItem, location }) {
 
       {selectedProduct && (
         <Suspense fallback={<p role="status">Loading product details…</p>}>
-          <ProductDetailsModal product={selectedProduct} onClose={() => setSelectedProduct(null)}
-            lat={lat} lon={lon} radiusKm={RADIUS_KM} token={token} adding={adding} onAddItem={() => addProduct(selectedProduct)} />
+          <ProductDetailsModal key={selectedProduct.productId} product={selectedProduct}
+            alternatives={request.filters.q || request.filters.category
+              ? products.filter(row => row.productId !== selectedProduct.productId).slice(0, 4) : []}
+            onSelectProduct={setSelectedProduct} onClose={() => setSelectedProduct(null)}
+            lat={lat} lon={lon} radiusKm={radius} token={token} adding={adding} onAddItem={() => addProduct(selectedProduct)} />
         </Suspense>
       )}
     </div>

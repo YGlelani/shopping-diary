@@ -227,6 +227,7 @@ public class ShoppingListService {
                     ON r.id = s.retailer_id
                 WHERE s.active = TRUE
                   AND r.active = TRUE
+                  AND s.store_code IS DISTINCT FROM 'ONLINE'
                   AND ST_DWithin(
                       s.location::geography,
                       ST_SetSRID(
@@ -234,62 +235,6 @@ public class ShoppingListService {
                           4326
                       )::geography,
                       :radiusMeters
-                  )
-            ),
-            latest_observations AS (
-                SELECT DISTINCT ON (
-                    po.product_id,
-                    po.store_id
-                )
-                    po.product_id,
-                    po.store_id,
-                    po.shelf_price,
-                    po.promo_price,
-                    po.observed_at,
-                    po.stock_status,
-                    po.verification_status
-                FROM price_observations po
-                JOIN nearby_stores ns
-                    ON ns.id = po.store_id
-                WHERE po.product_id IN (
-                    SELECT product_id
-                    FROM shopping_list_items
-                    WHERE list_id = :listId
-                      AND product_id IS NOT NULL
-                )
-                ORDER BY
-                    po.product_id,
-                    po.store_id,
-                    po.observed_at DESC,
-                    po.id DESC
-            ),
-            eligible_prices AS (
-                SELECT
-                    product_id,
-                    store_id,
-                    CASE
-                        WHEN promo_price > 0
-                             AND shelf_price > 0
-                            THEN LEAST(
-                                promo_price,
-                                shelf_price
-                            )
-                        WHEN promo_price > 0
-                            THEN promo_price
-                        WHEN shelf_price > 0
-                            THEN shelf_price
-                        ELSE NULL
-                    END AS effective_price
-                FROM latest_observations
-                WHERE observed_at >= (
-                    CURRENT_TIMESTAMP
-                    - (:maxAgeDays * INTERVAL '1 day')
-                )
-                  AND observed_at <= CURRENT_TIMESTAMP
-                  AND stock_status = 'IN_STOCK'
-                  AND verification_status IN (
-                      'VERIFIED',
-                      'UNVERIFIED'
                   )
             )
             SELECT
@@ -299,14 +244,19 @@ public class ShoppingListService {
                 ns.distance_m,
                 COUNT(ep.effective_price) AS covered_items,
                 COALESCE(
-                    SUM(li.quantity * ep.effective_price),
+                    SUM(line.total),
                     0
                 ) AS subtotal
             FROM nearby_stores ns
             CROSS JOIN shopping_list_items li
-            LEFT JOIN eligible_prices ep
-                ON ep.product_id = li.product_id
-               AND ep.store_id = ns.id
+            LEFT JOIN LATERAL current_branch_price(li.product_id, ns.id, :maxAgeDays) ep ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT round(least(li.quantity * ep.effective_price,
+                    min(p.promo_price * trunc(li.quantity / p.min_quantity)
+                        + ep.effective_price * mod(li.quantity, p.min_quantity))), 2) AS total
+                FROM current_branch_promotions p
+                WHERE p.product_id = li.product_id AND p.store_id = ns.id AND p.promo_type = 'MULTIBUY'
+            ) line ON ep.effective_price IS NOT NULL
             WHERE li.list_id = :listId
             GROUP BY
                 ns.id,

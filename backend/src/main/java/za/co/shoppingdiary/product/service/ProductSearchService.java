@@ -12,6 +12,9 @@ import za.co.shoppingdiary.product.dto.ProductSearchHit;
 import za.co.shoppingdiary.product.dto.StorePriceRow;
 
 import java.sql.Types;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import za.co.shoppingdiary.price.OfferPricing;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
@@ -31,7 +34,7 @@ public class ProductSearchService {
     private int maxAgeDays = 7;
 
     private static final Pattern SIZE = Pattern.compile(
-            "(?iu)(?<![\\p{L}\\d])\\d+(?:[.,]\\d+)?\\s*(?:kg|g|ml|l)(?![\\p{L}\\d])");
+            "(?iu)(?<![\\p{L}\\d])\\d+(?:[.,]\\d+)?\\s*(?:kg|g|ml|l|count|pack|pk)(?![\\p{L}\\d])");
 
     public record SearchTerms(String text, String barcode, String size) {
         public static SearchTerms parse(String query) {
@@ -46,27 +49,8 @@ public class ProductSearchService {
         }
     }
 
-    // Select the latest non-future observation before checking eligibility. A newer
-    // out-of-stock or disputed observation supersedes an older usable price.
-    private static final String ELIGIBLE_STORE_PRICE = """
-        JOIN LATERAL (
-            SELECT latest.*, COALESCE(latest.promo_price, latest.shelf_price) AS effective_price
-            FROM (
-                SELECT CASE WHEN shelf_price > 0 THEN shelf_price END AS shelf_price,
-                    CASE WHEN promo_price > 0 AND (shelf_price IS NULL OR shelf_price <= 0
-                        OR promo_price <= shelf_price) THEN promo_price END AS promo_price,
-                    member_price, unit_price, observed_at, verification_status, stock_status
-                FROM price_observations
-                WHERE product_id = %s AND store_id = s.id AND observed_at <= CURRENT_TIMESTAMP
-                ORDER BY observed_at DESC, id DESC
-                LIMIT 1
-            ) latest
-            WHERE latest.observed_at >= CURRENT_TIMESTAMP - make_interval(days => :maxAgeDays)
-              AND latest.stock_status = 'IN_STOCK'
-              AND latest.verification_status IN ('VERIFIED', 'UNVERIFIED')
-              AND (latest.shelf_price IS NOT NULL OR latest.promo_price IS NOT NULL)
-        ) po ON TRUE
-        """;
+    private static final String ELIGIBLE_STORE_PRICE =
+            "JOIN LATERAL current_branch_price(%s, s.id, :maxAgeDays) po ON TRUE";
 
     private static final String CATALOGUE = """
         WITH RECURSIVE departments AS (
@@ -79,7 +63,7 @@ public class ProductSearchService {
                 COALESCE(d.department, c.name, NULLIF(btrim(p.category), '')) AS department,
                 COALESCE(NULLIF(btrim(p.size_text), ''), trim_scale(p.base_quantity)::text || ' ' || p.base_unit,
                     CASE WHEN p.canonical_name !~* '[0-9][[:space:]]*[x?][[:space:]]*[0-9]' THEN
-                        substring(p.canonical_name FROM '(?i)[[:space:]]([0-9]+(?:[.,][0-9]+)?[[:space:]]*(?:kg|g|ml|l))[[:space:]]*$')
+                        substring(p.canonical_name FROM '(?i)[[:space:]]([0-9]+(?:[.,][0-9]+)?[[:space:]]*(?:kg|g|ml|l|count|pack|pk))[[:space:]]*$')
                     END) AS package_label
             FROM products p
             LEFT JOIN categories c ON c.id = p.category_id
@@ -134,8 +118,8 @@ public class ProductSearchService {
                 .max(Comparator.comparingInt(String::length)).orElse("");
         String sql = CATALOGUE + """
             , nearby_stores AS MATERIALIZED (
-                SELECT id FROM stores
-                WHERE active AND ST_DWithin(location::geography,
+                SELECT s.id FROM stores s JOIN retailers r ON r.id = s.retailer_id
+                WHERE s.active AND r.active AND s.store_code IS DISTINCT FROM 'ONLINE' AND ST_DWithin(location::geography,
                     ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography, :radiusMeters)
             ),
             matches AS (
@@ -229,22 +213,38 @@ public class ProductSearchService {
             double lon,
             double radiusKm
     ) {
+        return pricesForProduct(productId, lat, lon, radiusKm, BigDecimal.ONE, null, null, null, null, null, "price", 0, 100);
+    }
+
+    public List<StorePriceRow> pricesForProduct(long productId, double lat, double lon, double radiusKm,
+            BigDecimal quantity, String retailer, String verification, Boolean promotion, BigDecimal minPrice, BigDecimal maxPrice,
+            String sort, int offset, int limit) {
         String sql = """
             WITH user_point AS (
                 SELECT ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography AS location
             )
-            SELECT s.id AS store_id, s.name AS store_name, r.name AS retailer_name,
+            SELECT s.id AS store_id, s.name AS store_name, r.name AS retailer_name, r.slug AS retailer_slug,
+                   r.logo_url, s.address, s.city, p.base_quantity, p.base_unit,
+                   coalesce(nullif(btrim(p.size_text), ''),
+                       CASE WHEN p.canonical_name !~* '[0-9][[:space:]]*[x?][[:space:]]*[0-9]' THEN
+                           substring(p.canonical_name FROM '(?i)[[:space:]]([0-9]+(?:[.,][0-9]+)?[[:space:]]*(?:kg|g|ml|l|count|pack|pk))[[:space:]]*$')
+                       END) AS size_text,
                    ST_Distance(s.location::geography, up.location) AS distance_m, po.*
             FROM stores s
             CROSS JOIN user_point up
             JOIN retailers r ON r.id = s.retailer_id
+            JOIN products p ON p.id = :productId
             %s
-            WHERE s.active AND ST_DWithin(s.location::geography, up.location, :radiusMeters)
-            ORDER BY po.effective_price, distance_m, s.id
+            WHERE s.active AND r.active AND s.store_code IS DISTINCT FROM 'ONLINE' AND ST_DWithin(s.location::geography, up.location, :radiusMeters)
+              AND (CAST(:retailer AS text) IS NULL OR r.slug = :retailer)
+              AND (CAST(:verification AS text) IS NULL OR po.verification_status = :verification)
+            ORDER BY distance_m, s.id
             """.formatted(ELIGIBLE_STORE_PRICE.formatted(":productId"));
 
         var params = new MapSqlParameterSource()
                 .addValue("productId", productId)
+                .addValue("retailer", retailer, Types.VARCHAR)
+                .addValue("verification", verification, Types.VARCHAR)
                 .addValue("maxAgeDays", maxAgeDays)
                 .addValue("lat", lat)
                 .addValue("lon", lon)
@@ -256,10 +256,20 @@ public class ProductSearchService {
             row.setStoreName(rs.getString("store_name"));
             row.setRetailerName(rs.getString("retailer_name"));
             row.setDistanceMeters(rs.getDouble("distance_m"));
+            row.setRetailerSlug(rs.getString("retailer_slug"));
+            row.setRetailerLogoUrl(rs.getString("logo_url"));
+            row.setAddress(rs.getString("address"));
+            row.setCity(rs.getString("city"));
+            row.setSourceType(rs.getString("source_type"));
+            row.setEffectivePrice(rs.getBigDecimal("effective_price"));
             row.setShelfPrice(rs.getBigDecimal("shelf_price"));
-            row.setPromoPrice(rs.getBigDecimal("promo_price"));
+            var promo = rs.getBigDecimal("promo_price");
+            if (promo != null && (row.getShelfPrice() == null || promo.compareTo(row.getShelfPrice()) < 0)) {
+                row.setPromoPrice(promo);
+            }
             row.setMemberPrice(rs.getBigDecimal("member_price"));
-            row.setUnitPrice(rs.getBigDecimal("unit_price"));
+            row.setPackageMeasure(OfferPricing.measure(
+                    rs.getBigDecimal("base_quantity"), rs.getString("base_unit"), rs.getString("size_text")));
             row.setObservedAt(rs.getObject("observed_at", OffsetDateTime.class).toInstant());
             row.setVerificationStatus(rs.getString("verification_status"));
             row.setStockStatus(rs.getString("stock_status"));
@@ -268,7 +278,34 @@ public class ProductSearchService {
         if (!prices.isEmpty()) {
             addActivePromotions(productId, prices);
         }
-        return prices;
+        for (var price : prices) {
+            var total = OfferPricing.total(price.getEffectivePrice(), quantity, null, null);
+            for (var offer : price.getPromotions()) {
+                if ("MULTIBUY".equals(offer.type())) {
+                    total = total.min(OfferPricing.total(price.getEffectivePrice(), quantity, offer.price(), offer.minQuantity()));
+                }
+            }
+            price.setTotalPrice(total);
+            price.setEffectivePrice(total.divide(quantity, 2, RoundingMode.HALF_UP));
+            var measure = price.getPackageMeasure();
+            if (measure != null) {
+                price.setUnitPrice(total.divide(quantity.multiply(measure.quantity()), 2, RoundingMode.HALF_UP));
+                price.setUnitLabel(measure.unit());
+            }
+        }
+        var filtered = prices.stream()
+                .filter(row -> minPrice == null || row.getTotalPrice().compareTo(minPrice) >= 0)
+                .filter(row -> maxPrice == null || row.getTotalPrice().compareTo(maxPrice) <= 0)
+                .filter(row -> promotion == null || promotion == (row.getPromoPrice() != null || !row.getPromotions().isEmpty()))
+                .toList();
+        var cheapest = filtered.stream().map(StorePriceRow::getTotalPrice).min(BigDecimal::compareTo);
+        filtered.forEach(row -> row.setCheapest(cheapest.orElseThrow().compareTo(row.getTotalPrice()) == 0));
+        Comparator<StorePriceRow> order = switch (sort) {
+            case "distance" -> Comparator.comparingDouble(StorePriceRow::getDistanceMeters);
+            case "freshness" -> Comparator.comparing(StorePriceRow::getObservedAt).reversed();
+            default -> Comparator.comparing(StorePriceRow::getTotalPrice);
+        };
+        return filtered.stream().sorted(order.thenComparing(StorePriceRow::getStoreId)).skip(offset).limit(limit).toList();
     }
 
     private void addActivePromotions(long productId, List<StorePriceRow> prices) {
@@ -276,19 +313,16 @@ public class ProductSearchService {
         prices.forEach(price -> byStore.put(price.getStoreId(), price));
 
         jdbc.query("""
-            SELECT store_id, promo_type, description, promo_price, min_quantity, end_date
-            FROM promotions
+            SELECT store_id, promo_type, description, promo_price, min_quantity, start_date, end_date
+            FROM current_branch_promotions
             WHERE product_id = :productId AND store_id IN (:storeIds)
-              AND status = 'ACTIVE'
-              AND (CURRENT_TIMESTAMP AT TIME ZONE 'Africa/Johannesburg')::date BETWEEN start_date AND end_date
-              AND promo_price > 0
-              AND (promo_type <> 'MULTIBUY' OR min_quantity > 1)
             ORDER BY end_date, promo_price, id
             """, new MapSqlParameterSource("productId", productId).addValue("storeIds", byStore.keySet()),
             rs -> {
                 byStore.get(rs.getLong("store_id")).getPromotions().add(new StorePriceRow.Promotion(
                         rs.getString("promo_type"), rs.getString("description"), rs.getBigDecimal("promo_price"),
-                        rs.getObject("min_quantity", Integer.class), rs.getObject("end_date", LocalDate.class)));
+                        rs.getObject("min_quantity", Integer.class), rs.getObject("start_date", LocalDate.class),
+                        rs.getObject("end_date", LocalDate.class)));
             });
     }
 
@@ -314,12 +348,14 @@ public class ProductSearchService {
 
             WHERE po.product_id = :productId
               AND po.observed_at <= CURRENT_TIMESTAMP
+              AND po.observed_at >= CURRENT_TIMESTAMP - interval '180 days'
               AND po.verification_status NOT IN ('DISPUTED', 'EXPIRED')
               AND (po.shelf_price > 0 OR po.promo_price > 0)
-            ORDER BY po.observed_at ASC, po.id ASC
+            ORDER BY po.observed_at DESC, po.id DESC
+            LIMIT 2000
             """;
 
-        return jdbc.query(
+        var rows = jdbc.query(
                 sql,
                 new MapSqlParameterSource("productId", productId),
                 (rs, rowNum) ->
@@ -332,5 +368,6 @@ public class ProductSearchService {
                                 ).toInstant()
                         )
         );
+        return rows.reversed();
     }
 }

@@ -8,6 +8,7 @@ import za.co.shoppingdiary.product.dto.StorePriceRow;
 import za.co.shoppingdiary.product.service.ProductSearchService;
 
 import java.util.List;
+import java.math.BigDecimal;
 
 @RestController
 @RequestMapping("/api/v1/products")
@@ -49,7 +50,7 @@ public class ProductSearchController {
         if (size != null) {
             var terms = ProductSearchService.SearchTerms.parse(size);
             if (terms.size() == null || !terms.text().isEmpty()) {
-                throw new IllegalArgumentException("Enter a package size such as 500 g or 2 L");
+                throw new IllegalArgumentException("Enter a package size such as 500 g, 2 L or 6 pack");
             }
             size = terms.size();
         }
@@ -62,9 +63,27 @@ public class ProductSearchController {
             @PathVariable("id") long id,
             @RequestParam("lat") double lat,
             @RequestParam("lon") double lon,
-            @RequestParam(name = "r", defaultValue = "15") double radiusKm) {
+            @RequestParam(name = "r", defaultValue = "15") double radiusKm,
+            @RequestParam(defaultValue = "1") int quantity,
+            @RequestParam(required = false) String retailer,
+            @RequestParam(required = false) String verification,
+            @RequestParam(required = false) Boolean promotion,
+            @RequestParam(required = false) BigDecimal minPrice,
+            @RequestParam(required = false) BigDecimal maxPrice,
+            @RequestParam(defaultValue = "price") String sort,
+            @RequestParam(defaultValue = "0") int offset,
+            @RequestParam(defaultValue = "100") int limit) {
         validateLocation(lat, lon, radiusKm);
-        return service.pricesForProduct(id, lat, lon, radiusKm);
+        if (quantity < 1 || quantity > 100 || limit < 1 || limit > 100 || offset < 0 || offset > 10000
+                || (minPrice != null && minPrice.signum() < 0)
+                || (maxPrice != null && (maxPrice.signum() <= 0
+                    || (minPrice != null && minPrice.compareTo(maxPrice) > 0)))
+                || !List.of("price", "distance", "freshness").contains(sort)
+                || (verification != null && !List.of("VERIFIED", "UNVERIFIED").contains(verification))) {
+            throw new IllegalArgumentException("Invalid comparison filters");
+        }
+        return service.pricesForProduct(id, lat, lon, radiusKm, BigDecimal.valueOf(quantity),
+                filter(retailer), verification, promotion, minPrice, maxPrice, sort, offset, limit);
     }
 
     private static String filter(String value) {

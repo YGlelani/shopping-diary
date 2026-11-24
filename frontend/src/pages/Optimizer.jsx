@@ -5,7 +5,7 @@ import { Card, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { apiRequest } from '../api/client';
 
-export default function Optimizer({ token, listId, location, budgetAmount }) {
+export default function Optimizer({ token, listId, location, budgetAmount, radius = 15 }) {
   const [optimization, setOptimization] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -16,7 +16,7 @@ export default function Optimizer({ token, listId, location, budgetAmount }) {
     try {
       const res = await apiRequest(`/lists/${listId}/optimize`, {
         method: 'POST',
-        body: JSON.stringify({ lat: location.lat, lon: location.lon, radiusKm: 10.0, costPerKm: 4.50 }),
+        body: JSON.stringify({ lat: location.lat, lon: location.lon, radiusKm: radius, costPerKm: 4.50 }),
       }, token);
       setOptimization(res);
     } catch (err) {
@@ -55,7 +55,7 @@ export default function Optimizer({ token, listId, location, budgetAmount }) {
     <div className="space-y-6 max-w-4xl mx-auto">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Optimisation Results</h1>
-        <p className="text-gray-500 mt-1">Based on your current shopping list and location.</p>
+        <p className="text-gray-500 mt-1">Using branches within {radius} km of your shopping location.</p>
       </div>
 
       {/* Recommendation Summary */}

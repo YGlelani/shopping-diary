@@ -5,8 +5,23 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import lombok.Getter;
+import lombok.Setter;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import za.co.shoppingdiary.price.OfferPricing.Measure;
 
 public class StorePriceRow {
+
+    @Getter @Setter private String retailerSlug;
+    @Getter @Setter private String retailerLogoUrl;
+    @Getter @Setter private String address;
+    @Getter @Setter private String city;
+    @Getter @Setter private String sourceType;
+    @Getter @Setter private BigDecimal effectivePrice;
+    @Getter @Setter private BigDecimal totalPrice;
+    @Getter @Setter private String unitLabel;
+    @Getter @Setter private boolean cheapest;
+    @JsonIgnore @Getter @Setter private Measure packageMeasure;
 
     private Long storeId;
     private String storeName;
@@ -21,7 +36,7 @@ public class StorePriceRow {
     private String stockStatus;
     private final List<Promotion> promotions = new ArrayList<>();
 
-    public record Promotion(String type, String description, BigDecimal price, Integer minQuantity, LocalDate endsOn) {}
+    public record Promotion(String type, String description, BigDecimal price, Integer minQuantity, LocalDate startsOn, LocalDate endsOn) {}
 
     public List<Promotion> getPromotions() { return promotions; }
 

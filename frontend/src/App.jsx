@@ -98,6 +98,7 @@ function SignedInApp({
   );
 
   const [saving, setSaving] = useState(false);
+  const [radius, setRadius] = useState(15);
 
   const activeList = lists.find(
     list => list.id === listId
@@ -354,7 +355,7 @@ function SignedInApp({
             <Route
               path="/discover"
               element={
-                <Discover token={token} onAddItem={addToCart} location={location} />
+                <Discover token={token} onAddItem={addToCart} location={location} radius={radius} onRadiusChange={setRadius} />
               }
             />
 
@@ -382,6 +383,7 @@ function SignedInApp({
               element={
                 location ? (
                   <Optimizer
+                    radius={radius}
                     key={listId}
                     token={token}
                     listId={listId}
@@ -427,6 +429,8 @@ function SignedInApp({
               path="/stores"
               element={
                 <NearbyStores
+                  radius={radius}
+                  onRadiusChange={setRadius}
                   location={location}
                   onLocationChange={
                     changeLocation

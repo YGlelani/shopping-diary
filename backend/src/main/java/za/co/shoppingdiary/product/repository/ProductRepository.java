@@ -7,11 +7,15 @@ import org.springframework.data.repository.query.Param;
 
 import za.co.shoppingdiary.product.entity.Product;
 
+import java.util.List;
 import java.util.Optional;
 
 public interface ProductRepository extends JpaRepository<Product, Long> {
     Optional<Product> findByBarcode(String barcode);
     Optional<Product> findFirstByBarcodeIsNullAndCanonicalNameIgnoreCaseAndBrandIgnoreCaseAndSizeTextIgnoreCase(
+            String canonicalName, String brand, String sizeText);
+
+    List<Product> findTop2ByBarcodeIsNullAndCanonicalNameIgnoreCaseAndBrandIgnoreCaseAndSizeTextIgnoreCase(
             String canonicalName, String brand, String sizeText);
 
     @Query(value = """

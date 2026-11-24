@@ -113,72 +113,19 @@ public class PriceAlertService {
         }
 
         String sql = """
-            WITH latest_observations AS (
-                SELECT DISTINCT ON (
-                    po.product_id,
-                    po.store_id
-                )
-                    po.product_id,
-                    po.store_id,
-                    po.shelf_price,
-                    po.promo_price,
-                    po.observed_at,
-                    po.stock_status,
-                    po.verification_status
+            WITH branch_products AS (
+                SELECT DISTINCT po.product_id, po.store_id
                 FROM price_observations po
-                JOIN stores s
-                    ON s.id = po.store_id
-                   AND s.active = TRUE
-                JOIN retailers r
-                    ON r.id = s.retailer_id
-                   AND r.active = TRUE
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM price_alerts a
-                    WHERE a.product_id = po.product_id
-                      AND a.active = TRUE
-                )
-                ORDER BY
-                    po.product_id,
-                    po.store_id,
-                    po.observed_at DESC,
-                    po.id DESC
-            ),
-            eligible AS (
-                SELECT
-                    product_id,
-                    CASE
-                        WHEN promo_price > 0
-                             AND shelf_price > 0
-                            THEN LEAST(
-                                promo_price,
-                                shelf_price
-                            )
-                        WHEN promo_price > 0
-                            THEN promo_price
-                        WHEN shelf_price > 0
-                            THEN shelf_price
-                        ELSE NULL
-                    END AS effective_price
-                FROM latest_observations
-                WHERE observed_at >= (
-                    CURRENT_TIMESTAMP
-                    - (? * INTERVAL '1 day')
-                )
-                  AND observed_at <= CURRENT_TIMESTAMP
-                  AND stock_status = 'IN_STOCK'
-                  AND verification_status IN (
-                      'VERIFIED',
-                      'UNVERIFIED'
-                  )
+                JOIN stores s ON s.id = po.store_id AND s.active
+                JOIN retailers r ON r.id = s.retailer_id AND r.active
+                WHERE s.store_code IS DISTINCT FROM 'ONLINE'
+                  AND EXISTS (SELECT 1 FROM price_alerts a WHERE a.product_id = po.product_id AND a.active)
             ),
             cheapest AS (
-                SELECT
-                    product_id,
-                    MIN(effective_price) AS price
-                FROM eligible
-                WHERE effective_price IS NOT NULL
-                GROUP BY product_id
+                SELECT bp.product_id, min(price.effective_price) AS price
+                FROM branch_products bp
+                CROSS JOIN LATERAL current_branch_price(bp.product_id, bp.store_id, ?) price
+                GROUP BY bp.product_id
             )
             UPDATE price_alerts a
             SET last_notified_at = CURRENT_TIMESTAMP

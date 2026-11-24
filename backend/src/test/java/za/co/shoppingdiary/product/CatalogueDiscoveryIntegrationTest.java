@@ -8,6 +8,8 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockMultipartFile;
+import za.co.shoppingdiary.ingestion.csv.service.CsvImportService;
 import org.springframework.security.web.FilterChainProxy;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
@@ -21,6 +23,7 @@ import za.co.shoppingdiary.user.entity.User;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @EnabledIfEnvironmentVariable(named = "DISCOVERY_POSTGIS_TEST", matches = "true")
@@ -48,6 +51,7 @@ class CatalogueDiscoveryIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired JwtService jwt;
     @Autowired SampleRetailerScraper scraper;
+    @Autowired CsvImportService csv;
     private final ObjectMapper json = new ObjectMapper();
     private MockMvc mvc;
     private long breadId;
@@ -71,7 +75,8 @@ class CatalogueDiscoveryIntegrationTest {
             VALUES ('Long Grain Rice','Tastic', '2000 g','Pantry essentials', NULL, NULL),
                    ('Long Grain Rice','Other Brand', NULL,'Pantry essentials', 1, 'kg'),
                    ('Full Cream Milk','Test Dairy', '2 L','Dairy and eggs', NULL, NULL),
-                   ('Orange Juice 750ml','Test Juice', NULL,'Beverages', NULL, NULL)
+                   ('Orange Juice 750ml','Test Juice', NULL,'Beverages', NULL, NULL),
+                   ('Large Eggs','Test Farm', '6 pack','Dairy and eggs', NULL, NULL)
             """);
         storeId = jdbc.queryForObject("""
             INSERT INTO stores (retailer_id, name, location)
@@ -93,6 +98,7 @@ class CatalogueDiscoveryIntegrationTest {
         search("full cream milk 2000ml").andExpect(jsonPath("$[0].canonicalName").value("Full Cream Milk"));
         search("0012345678901").andExpect(jsonPath("$.length()").value(1));
         search("0012345678999").andExpect(jsonPath("$.length()").value(0));
+        search("large eggs 6 pack").andExpect(jsonPath("$[0].canonicalName").value("Large Eggs"));
         search("750ml").andExpect(jsonPath("$[0].canonicalName").value("Orange Juice 750ml"));
         search("750ml").andExpect(jsonPath("$[0].sizeText").value("750ml"));
         mvc.perform(get("/api/v1/products/search").param("category", "Bakery"))
@@ -190,6 +196,140 @@ class CatalogueDiscoveryIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].barcode").value("0012345678911"))
                 .andExpect(jsonPath("$[0].minEffectivePrice").value(28.99));
+    }
+
+    @Test
+    void comparesTheSameProductAcrossBranchesAndKeepsBasketTotalsConsistent() throws Exception {
+        observe("CURRENT_TIMESTAMP - interval '2 hours'", 30, null, "IN_STOCK", "VERIFIED", "branch-one");
+        long nearby = addBranch("Boxer nearby", "boxer", 28.02);
+        long far = addBranch("Boxer outside radius", "boxer", 29.0);
+        jdbc.update("""
+            INSERT INTO price_observations (product_id, store_id, shelf_price, member_price,
+                source_type, observed_at, stock_status, verification_status, content_hash)
+            VALUES (?, ?, 29, 10, 'API', CURRENT_TIMESTAMP, 'IN_STOCK', 'UNVERIFIED', 'branch-two'),
+                   (?, ?, 12, NULL, 'API', CURRENT_TIMESTAMP, 'IN_STOCK', 'VERIFIED', 'branch-far')
+            """, breadId, nearby, breadId, far);
+        jdbc.update("""
+            INSERT INTO promotions (product_id, store_id, promo_type, promo_price, min_quantity, start_date, end_date, status)
+            VALUES (?, ?, 'MULTIBUY', 50, 2, CURRENT_DATE - 1, CURRENT_DATE + 1, 'ACTIVE'),
+                   (?, ?, 'DISCOUNT', 1, 1, CURRENT_DATE - 9, CURRENT_DATE - 2, 'ACTIVE')
+            """, breadId, storeId, breadId, nearby);
+        prices().andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].storeId").value(nearby))
+                .andExpect(jsonPath("$[0].effectivePrice").value(29))
+                .andExpect(jsonPath("$[0].memberPrice").value(10))
+                .andExpect(jsonPath("$[0].unitPrice").value(41.43))
+                .andExpect(jsonPath("$[0].unitLabel").value("kg"));
+
+        mvc.perform(get("/api/v1/products/" + breadId + "/prices").param("lat", "-26").param("lon", "28")
+                .param("quantity", "2").param("verification", "VERIFIED").param("minPrice", "48").param("maxPrice", "55"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].storeId").value(storeId))
+                .andExpect(jsonPath("$[0].totalPrice").value(50))
+                .andExpect(jsonPath("$[0].effectivePrice").value(25))
+                .andExpect(jsonPath("$[0].cheapest").value(true));
+
+        String token = register("comparison-buyer@example.test");
+        String created = mvc.perform(post("/api/v1/lists").header("Authorization", token)
+                .contentType("application/json").content("{\"name\":\"Comparison\"}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        long listId = json.readTree(created).path("id").asLong();
+        mvc.perform(post("/api/v1/lists/" + listId + "/items").header("Authorization", token)
+                .contentType("application/json").content("{\"productId\":" + breadId + ",\"quantity\":2}"))
+                .andExpect(status().isCreated());
+        mvc.perform(get("/api/v1/lists/" + listId + "/baskets").header("Authorization", token)
+                .param("lat", "-26").param("lon", "28"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].subtotal").value(50));
+        mvc.perform(post("/api/v1/lists/" + listId + "/optimize").header("Authorization", token)
+                .contentType("application/json").content("{\"lat\":-26,\"lon\":28,\"costPerKm\":0}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.recommendation.grandTotal").value(50));
+    }
+
+    @Test
+    void separatesFreshnessFromVerificationAndDoesNotResurrectDisputedPrices() throws Exception {
+        observe("CURRENT_TIMESTAMP - interval '5 hours'", 30, null, "IN_STOCK", "VERIFIED", "earlier");
+        observe("CURRENT_TIMESTAMP - interval '3 hours'", 25, null, "IN_STOCK", "DISPUTED", "disputed");
+        prices().andExpect(jsonPath("$.length()").value(0));
+        jdbc.update("UPDATE price_observations SET source_type = 'COMMUNITY', observed_at = CURRENT_TIMESTAMP - interval '4 days' WHERE content_hash = 'earlier'");
+        jdbc.update("DELETE FROM price_observations WHERE content_hash = 'disputed'");
+        prices().andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void reportsDirectoryCoverageAndPublishesOnlyReviewedBranchContributions() throws Exception {
+        String buyer = register("contributor@example.test");
+        mvc.perform(get("/api/v1/admin/directory").header("Authorization", buyer)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/v1/admin/price-submissions").header("Authorization", buyer)).andExpect(status().isForbidden());
+
+        var admin = new User();
+        admin.setId(1L);
+        admin.setEmail("directory-admin@example.test");
+        admin.setDisplayName("Directory Admin");
+        admin.setRole(Role.ADMIN);
+        String token = "Bearer " + jwt.issue(admin);
+        mvc.perform(get("/api/v1/admin/directory").header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(20));
+        long retailer = jdbc.queryForObject("SELECT id FROM retailers WHERE slug = 'boxer'", Long.class);
+        mvc.perform(put("/api/v1/admin/directory/" + retailer + "/branches/TEST-BRANCH")
+                .header("Authorization", token).contentType("application/json")
+                .content("{\"name\":\"Boxer test branch\",\"address\":\"Test address\",\"city\":\"Polokwane\",\"province\":\"Limpopo\",\"lat\":-23.9,\"lon\":29.4,\"active\":true}"))
+                .andExpect(status().isOk());
+        mvc.perform(get("/api/v1/admin/directory/" + retailer + "/branches").header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].usable").value(false));
+        long branch = jdbc.queryForObject("SELECT id FROM stores WHERE retailer_id = ? AND store_code = 'TEST-BRANCH'",
+                Long.class, retailer);
+        mvc.perform(put("/api/v1/admin/directory/" + retailer + "/branches/TEST-BRANCH").param("branchId", String.valueOf(branch))
+                .header("Authorization", token).contentType("application/json")
+                .content("{\"name\":\"Corrected Boxer branch\",\"address\":\"Test address\",\"city\":\"Polokwane\",\"province\":\"Limpopo\",\"lat\":-23.91,\"lon\":29.4,\"active\":true}"))
+                .andExpect(status().isOk()).andExpect(content().string(String.valueOf(branch)));
+        mvc.perform(get("/api/v1/stores/areas").param("q", "Polok").header("Authorization", buyer))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].city").value("Polokwane"));
+        mvc.perform(put("/api/v1/admin/directory/" + retailer + "/aliases").header("Authorization", token)
+                .contentType("application/json").content("{\"rawName\":\"Sasko exact 700g\",\"barcode\":\"0012345678901\"}"))
+                .andExpect(status().isOk());
+
+        String submitted = json.writeValueAsString(java.util.Map.of(
+                "productId", breadId, "storeId", storeId, "price", 24, "inStock", true,
+                "observedAt", java.time.OffsetDateTime.now().minusMinutes(1).toString(),
+                "evidence", "Shelf reference"));
+        mvc.perform(post("/api/v1/price-submissions").header("Authorization", buyer)
+                .contentType("application/json").content(submitted)).andExpect(status().isOk());
+        prices().andExpect(jsonPath("$.length()").value(0));
+        String queue = mvc.perform(get("/api/v1/admin/price-submissions").header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].barcode").value("0012345678901"))
+                .andReturn().getResponse().getContentAsString();
+        long submissionId = json.readTree(queue).get(0).path("id").asLong();
+        mvc.perform(post("/api/v1/admin/price-submissions/" + submissionId).param("approve", "true")
+                .header("Authorization", token)).andExpect(status().isOk());
+        prices().andExpect(jsonPath("$[0].sourceType").value("COMMUNITY"))
+                .andExpect(jsonPath("$[0].effectivePrice").value(24));
+    }
+
+    @Test
+    void csvRetainsObservationSourceAndSeparatesIdenticalNamesWithDifferentPackageSizes() {
+        jdbc.update("UPDATE stores SET store_code = 'CSV-TEST' WHERE id = ?", storeId);
+        String date = java.time.OffsetDateTime.now().minusMinutes(3).toString();
+        String rows = """
+            retailer_slug,store_code,product_name,brand,size_text,shelf_price,stock_status,observed_at,source_type,source_reference
+            checkers,CSV-TEST,White Rice,Test Farm,500 g,14,IN_STOCK,%s,RECEIPT,Test receipt A
+            checkers,CSV-TEST,White Rice,Test Farm,2 kg,46,IN_STOCK,%s,RECEIPT,Test receipt B
+            """.formatted(date, date);
+        var file = new MockMultipartFile("file", "test.csv", "text/csv",
+                rows.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        org.junit.jupiter.api.Assertions.assertEquals(2, csv.importFile(file).getImported());
+        org.junit.jupiter.api.Assertions.assertEquals(2, csv.importFile(file).getSkipped());
+        org.junit.jupiter.api.Assertions.assertEquals(2, jdbc.queryForObject("""
+            SELECT count(DISTINCT product_id) FROM price_observations
+            WHERE store_id = ? AND source_type = 'RECEIPT'
+            """, Integer.class, storeId));
+    }
+
+    private long addBranch(String name, String slug, double lon) {
+        return jdbc.queryForObject("""
+            INSERT INTO stores (retailer_id, name, location)
+            SELECT id, ?, ST_SetSRID(ST_MakePoint(?, -26), 4326)
+            FROM retailers WHERE slug = ? RETURNING id
+            """, Long.class, name, lon, slug);
     }
 
     private String register(String email) throws Exception {
