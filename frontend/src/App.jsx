@@ -80,10 +80,6 @@ function SignedInApp({
     list => list.id === listId
   );
 
-  const planLocation = activeList?.locationLat != null
-    ? { lat: activeList.locationLat, lon: activeList.locationLon, label: activeList.locationLabel }
-    : location;
-
   const changeLocation = useCallback(
     (lat, lon, label) => {
       if (lat == null && lon == null) {
@@ -306,28 +302,8 @@ function SignedInApp({
 
             <Route
               path="/optimize"
-              element={
-                planLocation ? (
-                  <Optimizer
-                    radius={radius}
-                    key={[listId, activeList?.revision, planLocation.lat, planLocation.lon, radius].join(':')}
-                    token={token}
-                    listId={listId}
-                    location={planLocation}
-                    budgetAmount={
-                      activeList?.budgetAmount
-                    }
-                  />
-                ) : (
-                  <Navigate
-                    to="/stores"
-                    state={{
-                      returnTo: '/optimize',
-                    }}
-                    replace
-                  />
-                )
-              }
+              element={<Optimizer token={token} lists={lists} listId={listId} onSelect={selectList}
+                location={location} onLocationChange={changeLocation} radius={radius} />}
             />
 
             <Route

@@ -53,6 +53,7 @@ class CatalogueDiscoveryIntegrationTest {
     @Autowired WebApplicationContext context;
     @Autowired FilterChainProxy security;
     @Autowired JdbcTemplate jdbc;
+    @Autowired jakarta.persistence.EntityManager entityManager;
     @Autowired JwtService jwt;
     @Autowired SampleRetailerScraper scraper;
     @Autowired CsvImportService csv;
@@ -530,8 +531,19 @@ class CatalogueDiscoveryIntegrationTest {
         mvc.perform(post(base + "/optimize").header("Authorization", buyer).contentType("application/json")
                 .content("{\"lat\":-26,\"lon\":28,\"costPerKm\":0}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.skippedItems").value(1))
-                .andExpect(jsonPath("$.recommendation.grandTotal").value(40))
+                .andExpect(jsonPath("$.recommendation.grandTotal").doesNotExist())
+                .andExpect(jsonPath("$.recommendation.knownCost").value(40))
+                .andExpect(jsonPath("$.recommendation.unresolved[0].name").value("Loose produce"))
                 .andExpect(jsonPath("$.recommendation.items[0].substitutedFor").value("Whole Wheat Bread"));
+        mvc.perform(post(base + "/optimize").header("Authorization", buyer).contentType("application/json")
+                .content("{\"lat\":-26,\"lon\":28,\"travelMode\":\"WALK\",\"rejectedAlternatives\":[" + item + "]}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.recommendation.knownCost").value(60));
+        jdbc.update("UPDATE products SET size_text='500 g' WHERE id=?", alternate);
+        entityManager.clear();
+        mvc.perform(post(base + "/optimize").header("Authorization", buyer).contentType("application/json")
+                .content("{\"lat\":-26,\"lon\":28,\"travelMode\":\"WALK\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.recommendation.knownCost").value(60));
+
     }
 
     @Test
@@ -637,6 +649,80 @@ class CatalogueDiscoveryIntegrationTest {
         jdbc.update("UPDATE promotions SET start_date=CURRENT_DATE-3,end_date=CURRENT_DATE-1 WHERE product_id=?", breadId);
         mvc.perform(local).andExpect(status().isOk()).andExpect(jsonPath("$.assessment.knownSubtotal").value(900))
                 .andExpect(jsonPath("$.lines[0].promotionEndsOn").doesNotExist());
+    }
+
+    @Test
+    void comparesTripsAndPreservesTheSelectedSnapshot() throws Exception {
+        String owner = register("optimizer-owner@example.test");
+        String stranger = register("optimizer-stranger@example.test");
+        String listId = newList(owner, "Optimisation test");
+        String path = "/api/v1/lists/" + listId;
+        var otherBranch = addBranch("Second branch", "shoprite", 28.01);
+        long milk = jdbc.queryForObject("SELECT id FROM products WHERE canonical_name='Full Cream Milk'",Long.class);
+        jdbc.update("""
+            INSERT INTO price_observations(product_id,store_id,shelf_price,source_type,stock_status,verification_status,content_hash)
+            VALUES (?, ?, 30, 'MANUAL','IN_STOCK','VERIFIED','optimizer-own-bread'),
+                   (?, ?, 40, 'MANUAL','IN_STOCK','VERIFIED','optimizer-other-bread'),
+                   (?, ?, 60, 'MANUAL','IN_STOCK','VERIFIED','optimizer-own-milk'),
+                   (?, ?, 20, 'MANUAL','IN_STOCK','VERIFIED','optimizer-other-milk')
+            """,breadId,storeId,breadId,otherBranch,milk,storeId,milk,otherBranch);
+        for (long product : new long[]{breadId,milk}) {
+            mvc.perform(post(path+"/items").header("Authorization",owner).contentType("application/json")
+                    .content(json.writeValueAsString(java.util.Map.of("productId",product,"quantity",1))))
+                    .andExpect(status().isCreated());
+        }
+        String request = """
+            {"lat":-26,"lon":28,"radiusKm":15,"maxStores":2,"travelMode":"FIXED","tripCost":5,"budgetAmount":60}
+            """;
+        var quote = json.readTree(mvc.perform(post(path+"/optimize").header("Authorization",owner).contentType("application/json")
+                .content(request.replace(":5,",":5.00,").replace(":60}",":60.00}"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.bestSingleStore.grandTotal").value(65))
+                .andExpect(jsonPath("$.recommendation.strategy").value("SPLIT"))
+                .andExpect(jsonPath("$.recommendation.totalProductCost").value(50))
+                .andExpect(jsonPath("$.recommendation.grandTotal").value(55))
+                .andExpect(jsonPath("$.recommendation.budgetStatus").value("WITHIN_BUDGET"))
+                .andExpect(jsonPath("$.recommendation.items[0].observationId").exists())
+                .andExpect(jsonPath("$.savingsVsBestSingle").value(10))
+                .andReturn().getResponse().getContentAsString());
+        String save = json.writeValueAsString(java.util.Map.of("listId",Long.valueOf(listId),"name","My shopping plan",
+                "strategy","SPLIT","fingerprint",quote.path("bestSplit").path("fingerprint").asText(),"assumptions",json.readTree(request)));
+        String key = java.util.UUID.randomUUID().toString();
+        String id = budgetPost("/api/v1/shopping-plans",owner,save,key);
+        org.junit.jupiter.api.Assertions.assertEquals(id,budgetPost("/api/v1/shopping-plans",owner,save,key));
+        String saved = "/api/v1/shopping-plans/" + id;
+        mvc.perform(get(saved).header("Authorization",stranger)).andExpect(status().isNotFound());
+        mvc.perform(post(path+"/optimize").header("Authorization",stranger).contentType("application/json").content(request))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(saved).header("Authorization",owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.estimate.grandTotal").value(55)).andExpect(jsonPath("$.assumptions.tripCost").value(5));
+        jdbc.update("UPDATE price_observations SET shelf_price=24 WHERE content_hash='optimizer-other-milk'");
+        mvc.perform(post("/api/v1/shopping-plans").header("Authorization",owner).header("Idempotency-Key",java.util.UUID.randomUUID())
+                .contentType("application/json").content(save)).andExpect(status().isConflict());
+        mvc.perform(get(saved).header("Authorization",owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.estimate.grandTotal").value(55));
+        mvc.perform(post(path+"/optimize").header("Authorization",owner).contentType("application/json")
+                .content(request.replace("FIXED","UNKNOWN"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.recommendation.grandTotal").doesNotExist())
+                .andExpect(jsonPath("$.recommendation.knownCost").value(54))
+                .andExpect(jsonPath("$.recommendation.budgetStatus").value("TRANSPORT_UNKNOWN"))
+                .andExpect(jsonPath("$.savingsVsBestSingle").doesNotExist());
+        mvc.perform(post(path+"/optimize").header("Authorization",owner).contentType("application/json")
+                .content(request.replace("maxStores\":2","maxStores\":1"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.recommendation.stores.length()").value(1));
+        long excluded = jdbc.queryForObject("SELECT retailer_id FROM stores WHERE id=?",Long.class,otherBranch);
+        var exclusions = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(request);
+        exclusions.putArray("excludedRetailers").add(excluded);
+        mvc.perform(post(path+"/optimize").header("Authorization",owner).contentType("application/json").content(exclusions.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.recommendation.grandTotal").value(95))
+                .andExpect(jsonPath("$.recommendation.budgetStatus").value("OVER_BUDGET"));
+        jdbc.update("UPDATE price_observations SET stock_status='OUT_OF_STOCK' WHERE content_hash LIKE 'optimizer-%-milk'");
+        mvc.perform(post(path+"/optimize").header("Authorization",owner).contentType("application/json").content(request))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.recommendation.unresolved[0].reason").value("OUT_OF_STOCK_OBSERVATION"));
+        mvc.perform(post(path+"/optimize").header("Authorization",owner).contentType("application/json")
+                .content(request.replace("28,","18,"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.recommendation.budgetStatus").value("NO_FEASIBLE_PLAN"))
+                .andExpect(jsonPath("$.recommendation.unresolved.length()").value(2))
+                .andExpect(jsonPath("$.recommendation.knownCost").doesNotExist());
     }
 
     private String budgetPost(String path, String token, String body, String key) throws Exception {

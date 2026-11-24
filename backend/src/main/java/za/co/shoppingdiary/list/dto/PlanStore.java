@@ -3,6 +3,8 @@ package za.co.shoppingdiary.list.dto;
 import java.math.BigDecimal;
 
 public class PlanStore {
+    @lombok.Getter @lombok.Setter private String address;
+
 
     private Long storeId;
     private String storeName;

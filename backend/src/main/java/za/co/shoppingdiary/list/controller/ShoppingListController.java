@@ -6,8 +6,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import za.co.shoppingdiary.auth.UserPrincipal;
+import za.co.shoppingdiary.budget.GroceryBudgetService;
 import za.co.shoppingdiary.list.dto.*;
-import za.co.shoppingdiary.list.service.BasketOptimizerService;
+import za.co.shoppingdiary.list.service.ShoppingPlanService;
 import za.co.shoppingdiary.list.service.ShoppingListService;
 
 import java.util.List;
@@ -21,7 +22,8 @@ import jakarta.validation.constraints.Size;
 public class ShoppingListController {
 
     private final ShoppingListService service;
-    private final BasketOptimizerService optimizerService;
+    private final ShoppingPlanService optimizerService;
+    private final GroceryBudgetService budgets;
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -128,10 +130,17 @@ public class ShoppingListController {
         return service.baskets(me.getId(), id, lat, lon, radiusKm);
     }
 
+    @GetMapping("/{id}/optimization-budgets")
+    public List<GroceryBudgetService.AvailableFunds> optimizationBudgets(@AuthenticationPrincipal UserPrincipal me,
+            @PathVariable long id) {
+        service.detail(me.getId(),id);
+        return budgets.availableFunds(me.getId(),id,null);
+    }
+
     @PostMapping("/{id}/optimize")
 public OptimizeResponse optimize(@AuthenticationPrincipal UserPrincipal me,
                                  @PathVariable Long id,
                                  @Valid @RequestBody OptimizeRequest req) {
-    return optimizerService.optimize(me.getId(), id, req);
+    return optimizerService.preview(me.getId(), id, req);
 }
 }

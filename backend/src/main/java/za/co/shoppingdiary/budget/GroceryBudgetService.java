@@ -55,6 +55,20 @@ public class GroceryBudgetService {
         FROM grocery_expenses e LEFT JOIN stores s ON s.id = e.branch_id
         """;
 
+    public record AvailableFunds(long id,String name,BigDecimal remaining) {}
+
+    @Transactional(readOnly = true)
+    public List<AvailableFunds> availableFunds(long owner,long list,Long id) {
+        return jdbc.sql("""
+            SELECT b.id,b.name,b.amount-coalesce((SELECT sum(amount) FROM grocery_expenses WHERE budget_id=b.id),0) AS remaining
+            FROM grocery_budgets b JOIN grocery_budget_lists l ON l.budget_id=b.id
+            WHERE b.user_id=:owner AND l.list_id=:list AND b.status='ACTIVE'
+              AND (:id IS NULL OR b.id=:id)
+              AND (CURRENT_TIMESTAMP AT TIME ZONE 'Africa/Johannesburg')::date BETWEEN b.starts_on AND b.ends_on
+            ORDER BY b.id DESC
+            """).param("owner",owner).param("list",list).param("id",id,Types.BIGINT).query(AvailableFunds.class).list();
+    }
+
     @Transactional(readOnly = true)
     public List<Overview> overview(long userId, int offset) {
         page(offset);

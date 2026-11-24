@@ -1,8 +1,19 @@
 package za.co.shoppingdiary.list.dto;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 public class OptimizeResponse {
+    @lombok.Getter @lombok.Setter private OptimizationPlan bestSplit;
+    @lombok.Getter @lombok.Setter private OptimizationPlan bestAlternatives;
+    @lombok.Getter @lombok.Setter private BigDecimal budgetAmount;
+    @lombok.Getter @lombok.Setter private boolean searchLimited;
+    @lombok.Getter @lombok.Setter private int branchesSearched;
+    @lombok.Getter @lombok.Setter private long listRevision;
+    @lombok.Getter @lombok.Setter private java.time.OffsetDateTime calculatedAt;
+    @lombok.Getter @lombok.Setter private List<PlanStore> branches;
+    @lombok.Getter @lombok.Setter private OptimizeRequest assumptions;
+
 
     private OptimizationPlan recommendation;
     private OptimizationPlan bestSingleStore;

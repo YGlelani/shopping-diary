@@ -4,7 +4,16 @@ import java.math.BigDecimal;
 import java.util.List;
 
 public class OptimizationPlan {
+    @lombok.Getter @lombok.Setter private String strategy;
+    @lombok.Getter @lombok.Setter private String budgetStatus;
+    @lombok.Getter @lombok.Setter private BigDecimal budgetDifference;
+    @lombok.Getter @lombok.Setter private BigDecimal knownCost;
+    @lombok.Getter @lombok.Setter private Double roundTripKm;
+    @lombok.Getter @lombok.Setter private List<MissingItem> unresolved;
+    public record MissingItem(long itemId, String name, BigDecimal quantity, String unit, String reason) {}
 
+
+    @lombok.Getter @lombok.Setter private String fingerprint;
     private List<PlanStore> stores;
     private List<PlanItem> items;
     private BigDecimal totalProductCost;

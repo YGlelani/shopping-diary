@@ -3,6 +3,18 @@ package za.co.shoppingdiary.list.dto;
 import java.math.BigDecimal;
 
 public class PlanItem {
+    @lombok.Getter @lombok.Setter private Long itemId;
+    @lombok.Getter @lombok.Setter private Long requestedProductId;
+    @lombok.Getter @lombok.Setter private String sizeText;
+    @lombok.Getter @lombok.Setter private String imageUrl;
+    @lombok.Getter @lombok.Setter private Long observationId;
+    @lombok.Getter @lombok.Setter private java.time.OffsetDateTime observedAt;
+    @lombok.Getter @lombok.Setter private String verificationStatus;
+    @lombok.Getter @lombok.Setter private String sourceType;
+    @lombok.Getter @lombok.Setter private java.time.LocalDate promotionEndsOn;
+    @lombok.Getter @lombok.Setter private String priceType;
+    @lombok.Getter @lombok.Setter private BigDecimal exactLineTotal;
+
     @lombok.Getter @lombok.Setter private String substitutedFor;
 
     private Long productId;

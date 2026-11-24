@@ -224,8 +224,8 @@ public class ShoppingListService {
         entry.setSubstituteProductId(alternate == null ? null : alternate.getId());
     }
 
-    private static boolean comparable(Product first, Product second) {
-        if (first == null || first.getId().equals(second.getId())) return false;
+    static boolean comparable(Product first, Product second) {
+        if (first == null || second == null || first.getId().equals(second.getId())) return false;
         boolean sameCategory = first.getCategoryId() != null
                 ? Objects.equals(first.getCategoryId(), second.getCategoryId())
                 : second.getCategoryId() == null && first.getCategory() != null

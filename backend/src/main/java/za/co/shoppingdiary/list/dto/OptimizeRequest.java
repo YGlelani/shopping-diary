@@ -1,63 +1,34 @@
-
 package za.co.shoppingdiary.list.dto;
 
-import jakarta.validation.constraints.DecimalMax;
-import jakarta.validation.constraints.DecimalMin;
-import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.*;
+import lombok.Getter;
+import lombok.Setter;
 
 import java.math.BigDecimal;
+import java.util.Set;
 
+@Getter
+@Setter
 public class OptimizeRequest {
-
-    @NotNull
-    @DecimalMin("-90.0")
-    @DecimalMax("90.0")
+    @NotNull @DecimalMin("-90") @DecimalMax("90")
     private Double lat;
-
-    @NotNull
-    @DecimalMin("-180.0")
-    @DecimalMax("180.0")
+    @NotNull @DecimalMin("-180") @DecimalMax("180")
     private Double lon;
-
-    @NotNull
-    @DecimalMin(value = "0.0", inclusive = false)
-    @DecimalMax("100.0")
+    @NotNull @DecimalMin(value = "0", inclusive = false) @DecimalMax("100")
     private Double radiusKm = 15.0;
+    @DecimalMin("0") @DecimalMax("1000") @Digits(integer=4, fraction=2)
+    private BigDecimal costPerKm;
+    @DecimalMin("0") @Digits(integer=8, fraction=2)
+    private BigDecimal tripCost;
+    @DecimalMin("0") @Digits(integer=8, fraction=2)
+    private BigDecimal budgetAmount;
+    @Positive private Long budgetId;
+    @Min(1) @Max(3) private int maxStores = 2;
+    @NotNull private TravelMode travelMode = TravelMode.UNKNOWN;
+    private boolean allowAlternatives = true;
+    @NotNull @Size(max=250) private Set<@NotNull @Positive Long> excludedRetailers = Set.of();
+    @Positive private Long preferredRetailer;
+    @NotNull @Size(max=1000) private Set<@NotNull @Positive Long> rejectedAlternatives = Set.of();
 
-    @NotNull
-    @DecimalMin("0.0")
-    private BigDecimal costPerKm =
-            new BigDecimal("4.50");
-
-    public Double getLat() {
-        return lat;
-    }
-
-    public void setLat(Double lat) {
-        this.lat = lat;
-    }
-
-    public Double getLon() {
-        return lon;
-    }
-
-    public void setLon(Double lon) {
-        this.lon = lon;
-    }
-
-    public Double getRadiusKm() {
-        return radiusKm;
-    }
-
-    public void setRadiusKm(Double radiusKm) {
-        this.radiusKm = radiusKm;
-    }
-
-    public BigDecimal getCostPerKm() {
-        return costPerKm;
-    }
-
-    public void setCostPerKm(BigDecimal costPerKm) {
-        this.costPerKm = costPerKm;
-    }
+    public enum TravelMode { UNKNOWN, WALK, DRIVE, PUBLIC_TRANSPORT, FIXED }
 }
