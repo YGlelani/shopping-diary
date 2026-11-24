@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { 
   LayoutDashboard, Search, List, Calculator, 
-  Bell, Store, LogOut, Settings, Menu, X
+  Bell, Store, LogOut, Settings, Menu, X, Wallet
 } from 'lucide-react';
 
 export default function AppLayout({ children, user, onLogout }) {
@@ -12,6 +12,7 @@ export default function AppLayout({ children, user, onLogout }) {
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     { name: 'Discover Products', path: '/discover', icon: Search },
     { name: 'My Shopping Lists', path: '/lists', icon: List },
+    { name: 'Grocery Budgets', path: '/budgets', icon: Wallet },
     { name: 'Basket Optimisation', path: '/optimize', icon: Calculator },
     { name: 'Nearby Stores', path: '/stores', icon: Store },
     { name: 'Price Alerts', path: '/alerts', icon: Bell },

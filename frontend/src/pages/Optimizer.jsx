@@ -33,6 +33,7 @@ export default function Optimizer({ token, listId, location, budgetAmount, radiu
           <Calculator size={32} />
         </div>
         <h1 className="text-2xl font-bold text-gray-900 mb-2">Basket Optimisation</h1>
+        {listId && <Link to={'/budgets?listId=' + listId} className="block text-sm text-emerald-800 underline">Manage grocery budgets</Link>}
         <p className="text-gray-500 mb-8">
           We will calculate whether buying everything at one store, or splitting your list between multiple stores, will save you the most money after estimated transport costs based on a separate straight-line round trip for each branch.
         </p>
@@ -55,6 +56,7 @@ export default function Optimizer({ token, listId, location, budgetAmount, radiu
     <div className="space-y-6 max-w-4xl mx-auto">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Optimisation Results</h1>
+        {listId && <Link to={'/budgets?listId=' + listId} className="block text-sm text-emerald-800 underline">Manage grocery budgets</Link>}
         <p className="text-gray-500 mt-1">Using branches within {radius} km of your shopping location.</p>
       </div>
 

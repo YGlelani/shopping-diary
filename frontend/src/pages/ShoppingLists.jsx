@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../api/client';
 import ListItemEditor from '../components/ListItemEditor';
 import ListProductPicker from '../components/ListProductPicker';
@@ -20,7 +20,7 @@ function ListMetadata({ list, location, busy, onSave }) {
     onSave({
       name: data.get('name'), description: data.get('description'), budgetAmount: data.get('budget') || null,
       locationLat: chosen?.lat ?? null, locationLon: chosen?.lon ?? null, locationLabel: chosen?.label ?? null,
-    });
+    }, data.has('planBudget'));
   }}>
     <label>List name<Input name="name" required maxLength={200} defaultValue={list?.name} /></label>
     <label>Budget (R)<Input name="budget" type="number" min="0" max="99999999.99" step="0.01" defaultValue={list?.budgetAmount} /></label>
@@ -33,13 +33,17 @@ function ListMetadata({ list, location, busy, onSave }) {
         {location && <option value="current">Save {location.label || 'current location'} with this list</option>}
       </select>
     </label>
+    {!list && <label className="flex items-center gap-2"><input type="checkbox" name="planBudget" /> Set up a grocery budget for this list</label>}
     <Button type="submit" disabled={busy} className="self-end">{busy ? 'Saving…' : list ? 'Save list details' : 'Create list'}</Button>
   </form>;
 }
 
 export default function ShoppingLists({ lists, listId, onSelect, onCreate, token, location, radius,
   onRemember, onRefresh, onForget, onAddItem }) {
-  const list = lists.find(candidate => candidate.id === listId);
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const requested = lists.find(row => String(row.id) === params.get('listId'));
+  const list = requested ?? lists.find(candidate => candidate.id === listId);
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState(null);
@@ -85,6 +89,7 @@ export default function ShoppingLists({ lists, listId, onSelect, onCreate, token
   }
 
   function open(id) {
+    if (requested) navigate('/lists', { replace: true });
     onSelect(id);
     setFeedback(null);
     onRefresh(id).catch(error => setFeedback({ error: true, message: error.message }));
@@ -99,6 +104,7 @@ export default function ShoppingLists({ lists, listId, onSelect, onCreate, token
       }, token);
       copyRequest.current = null;
       onRemember(copy);
+      if (requested) navigate('/lists', { replace: true });
       onSelect(copy.id);
     });
   }
@@ -127,9 +133,10 @@ export default function ShoppingLists({ lists, listId, onSelect, onCreate, token
     </div>
     {(creating || lists.length === 0) && <section className="space-y-3 rounded-xl border bg-white p-4">
       <h2 className="font-semibold">New shopping list</h2>
-      <ListMetadata location={location} busy={busy} onSave={values => run(async () => {
-        await onCreate(values);
+      <ListMetadata location={location} busy={busy} onSave={(values, planBudget) => run(async () => {
+        const created = await onCreate(values);
         setCreating(false);
+        if (planBudget) navigate('/budgets?listId=' + created.id);
       })} />
     </section>}
     {feedback && <div role={feedback.error ? 'alert' : 'status'} className={feedback.error ? 'text-sm text-red-700' : 'text-sm text-emerald-800'}>
@@ -137,14 +144,14 @@ export default function ShoppingLists({ lists, listId, onSelect, onCreate, token
       {feedback.error && list && <Button variant="secondary" disabled={busy} className="ml-2" onClick={() => run(() => onRefresh(list.id))}>Reload saved list</Button>}
     </div>}
     {lists.length > 0 && <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label="Saved shopping lists">
-      {lists.map(row => <li key={row.id} className={'space-y-2 rounded-xl border bg-white p-4 ' + (row.id === listId ? 'ring-2 ring-emerald-700' : '')}>
+      {lists.map(row => <li key={row.id} className={'space-y-2 rounded-xl border bg-white p-4 ' + (row.id === list?.id ? 'ring-2 ring-emerald-700' : '')}>
         <h2 className="break-words font-semibold">{row.name}</h2>
         <p className="text-sm text-gray-600">{row.status === 'DRAFT' ? 'Draft' : row.status.toLowerCase()} · {row.items.length} entries · {row.items.filter(item => item.purchased).length} purchased</p>
         <p className="text-sm text-gray-600">Updated {formatObservationDate(row.updatedAt ?? row.createdAt)}{row.budgetAmount != null && ' · Budget R' + Number(row.budgetAmount).toFixed(2)}</p>
         {covered.get(row.id)?.hasLocation &&
           <p className="text-sm text-gray-600">{covered.get(row.id).pricedItems} of {row.items.length} entries with a usable price</p>}
         <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" onClick={() => open(row.id)}>{row.id === listId ? 'Reload list' : 'Open list'}</Button>
+          <Button variant="secondary" onClick={() => open(row.id)}>{row.id === list?.id ? 'Reload list' : 'Open list'}</Button>
           <Button variant="ghost" disabled={busy} onClick={() => duplicate(row, (row.name.slice(0, 193) + ' copy'))}>Duplicate</Button>
           <Button variant="ghost" disabled={busy} onClick={() => changeStatus(row, row.status === 'ARCHIVED' ? 'ACTIVE' : 'ARCHIVED')}>
             {row.status === 'ARCHIVED' ? 'Restore' : 'Archive'}</Button>
@@ -154,11 +161,12 @@ export default function ShoppingLists({ lists, listId, onSelect, onCreate, token
     </ul>}
     {list && <ListDetail key={list.id} list={list} token={token} activeLocation={location} radius={radius}
       busy={busy} run={run} onRemember={onRemember} onRefresh={onRefresh} onAddItem={onAddItem}
-      onDuplicate={name => duplicate(list, name)} onStatus={status => changeStatus(list, status)} />}
+      onDuplicate={name => duplicate(list, name)} onStatus={status => changeStatus(list, status)}
+      onPlan={() => onSelect(list.id)} />}
   </div>;
 }
 
-function ListDetail({ list, token, activeLocation, radius, busy, run, onRemember, onRefresh, onAddItem, onDuplicate, onStatus }) {
+function ListDetail({ list, token, activeLocation, radius, busy, run, onRemember, onRefresh, onAddItem, onDuplicate, onStatus, onPlan }) {
   const [quotes, setQuotes] = useState(null);
   const [edit, setEdit] = useState(null);
   const [adding, setAdding] = useState('');
@@ -247,7 +255,8 @@ function ListDetail({ list, token, activeLocation, radius, busy, run, onRemember
         <p className="text-sm text-gray-600">{purchased} of {list.items.length} purchased</p>
         {quantities.size > 0 && <p className="text-sm text-gray-600">{[...quantities].map(([unit, quantity]) => quantity / 1000 + ' ' + unit).join(' · ')}</p>}
       </div>
-      <Link className="text-sm text-emerald-800 underline" to="/optimize">Plan remaining basket</Link>
+      <Link className="text-sm text-emerald-800 underline" to="/optimize" onClick={onPlan}>Plan remaining basket</Link>
+      <Link className="text-sm text-emerald-800 underline" to={'/budgets?listId=' + list.id}>Create a budget for this list</Link>
     </div>
     <details><summary className="cursor-pointer text-sm font-medium">Edit list details</summary>
       <ListMetadata key={list.revision} list={list} location={activeLocation} busy={busy} onSave={values => run(async () => {
@@ -273,7 +282,7 @@ function ListDetail({ list, token, activeLocation, radius, busy, run, onRemember
       {quoteResult?.rows && missing > 0 && <p>{missing === 1 ? '1 entry lacks' : missing + ' entries lack'} a usable price. The full cost is unknown.</p>}
       {list.budgetAmount != null && <p>Budget R{Number(list.budgetAmount).toFixed(2)}
         {byItem.size > 0 && cents / 100 > Number(list.budgetAmount) && ' · Priced items alone exceed the budget'}
-        {byItem.size > 0 && missing === 0 && cents / 100 <= Number(list.budgetAmount) && ' · Listed item prices fit the budget before travel'}</p>}
+        {byItem.size > 0 && missing === 0 && new Set([...byItem.values()].map(row => row.storeId)).size === 1 && cents / 100 <= Number(list.budgetAmount) && ' · Listed item prices fit the budget before travel'}</p>}
     </div>
     {editable && <div className="flex flex-wrap gap-2">
       <Button onClick={() => setAdding(value => value === 'catalogue' ? '' : 'catalogue')}>Add catalogue product</Button>

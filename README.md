@@ -165,3 +165,36 @@ List and item edits use the saved list revision and return 409 when the revision
 V19 adds list metadata, item notes and purchasing status, an approved alternate reference, add-retry tracking and the shared list-offer calculation. It preserves existing items and backfills catalogue names so an item can remain readable if its product is removed later. V20 adds per-owner creation retry keys. Both changes are additive. Run the isolated PostGIS suite and frontend lint and production build above. Deploy the backend with V19 and V20 before the frontend. To roll back, restore the earlier app builds and retain the migrations and saved list data.
 
 The browser demo uses a disposable API on loopback port 18082, Vite on localhost port 55176, Chrome DevTools on loopback port 59224, and the fixture in backend/src/test/resources/shopping-list-browser-fixture.sql applied to the disposable PostGIS database. Run node frontend/scripts/lists-smoke.mjs from the repository root to exercise the flow and write screenshots to backend/target. Keep verification prices confined to the disposable database.
+
+## Grocery budget planning and tracking
+
+Open **Grocery Budgets** or start a budget from an existing shopping list. Budgets support single trips, weekly and fortnightly periods, monthly periods starting on the chosen day, and custom date ranges. The dashboard links one or more owned lists. Marking a list item purchased changes only the list. Record the receipt or individual purchase separately to update actual spending. A list can be reused across periods. When two distinct lists both call for a product, their quantities represent separate requests. Repeated links to the same list are stored once.
+
+Phase 4 stored only a cap on each list and calculated a local balance from the returned price rows. It had no dated budget history, actual purchases or independent ledger. The cap and existing list and optimiser API contracts are still supported. Flyway V21 adds budgets, owned list links and actual expenses. Archived budgets preserve a dated aggregate estimate. Reuse copies the budget settings and links.
+
+The backend uses PostgreSQL decimal values and Java BigDecimal. It quotes using the same exact package IDs, approved substitutions, fresh branch observations and eligible promotions as the shopping list. A selected branch restricts all quotes to that branch. With no branch selected, the estimate uses the best eligible line available for each item, so prices can span branches. Lists use their saved location first and otherwise use the active shopping location. A missing quote has a null value. When some prices are unavailable, the balance applies only to the known subtotal. A known subtotal above the cap triggers an overspending warning even with missing lines. A full estimate is marked within budget only when all priced lines are available at the same branch. Verification, observation dates and known promotion expiry dates are shown when available. The dashboard rechecks visible estimates every minute and supports manual refresh.
+
+Actual balance is the budget cap minus the sum of recorded purchases. Purchases must be dated within the budget period and may be corrected later. The dashboard shows category totals and a comparison when the full plan has eligible prices and purchases have been recorded. The comparison uses the recorded period total and the full list estimate. Purchase-level price attribution requires an item-by-item receipt breakdown. No trend is inferred from periods with unknown receipt completeness.
+
+### Budget API
+
+All routes require the current user. The base path is /api/v1/budgets.
+
+| Operation | Method and path |
+| --- | --- |
+| View budget history or a budget and its ledger | GET / or GET /{id}, with optional offset |
+| Create or reuse a budget | POST / or POST /{id}/reuse |
+| Edit or delete a budget | PUT or DELETE /{id}, with revision |
+| Request an estimate or archive with a snapshot | GET /{id}/estimate or POST /{id}/archive |
+| Record a purchase | POST /{id}/expenses with an Idempotency-Key UUID |
+| Correct or remove a purchase | PUT or DELETE /{id}/expenses/{expenseId}, with revision |
+
+Estimate and archive accept optional lat, lon, r (kilometres, default 15), and branchId. Archive also requires the current revision. Create and reuse accept an optional Idempotency-Key UUID for safe retry. A stale revision returns HTTP 409.
+
+### Budget release and rollback
+
+1. Snapshot the database beforehand and use a separate Neon staging database or disposable PostGIS database first. Start the backend and confirm Flyway applies V21 successfully.
+2. Run Maven verify with DISCOVERY_POSTGIS_TEST=true against the disposable discovery_test database at loopback port 55436. Run npm run lint and npm run build from frontend.
+3. Smoke-test create, link, partial-pricing warnings, actual spending, correction and reuse. The loopback browser script is frontend/scripts/budget-smoke.mjs. It uses the fixture backend/src/test/resources/shopping-list-browser-fixture.sql on discovery_test, the API on port 18083, Vite on localhost:55177 and headless Chrome CDP on port 59225. Run it with Node from the repository root. Screenshots go to backend/target.
+4. Deploy the Render API with the existing runtime settings, confirm Flyway and health, then deploy the Vercel frontend. Verify the authenticated dashboard with staging data before promoting the release.
+5. For rollback, revert the Vercel frontend first and leave the additive V21 schema in place to preserve purchases. If the earlier API image fails Flyway validation because it predates V21, use a rollback build with the previous application code and the unchanged V21 migration bundled. A staging snapshot can be restored to a separate database for recovery verification. Any production restore needs an explicit recovery plan for purchases recorded after the snapshot.

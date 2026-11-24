@@ -21,6 +21,7 @@ import Dashboard from './pages/Dashboard';
 import Discover from './pages/Discover';
 import ShoppingLists from './pages/ShoppingLists';
 import Optimizer from './pages/Optimizer';
+import Budgets from './pages/Budgets';
 import AppLayout from './components/layout/AppLayout';
 import Admin from './pages/Admin';
 import PriceAlerts from './pages/PriceAlerts';
@@ -272,6 +273,7 @@ function SignedInApp({
           }
         >
           <Routes>
+            <Route path="/budgets" element={<Budgets token={token} lists={lists} location={location} radius={radius} />} />
             <Route
               path="/"
               element={

@@ -31,6 +31,7 @@ public class ShoppingListService {
     private final ShoppingListItemRepository items;
     private final ProductRepository products;
     private final NamedParameterJdbcTemplate jdbc;
+    private final ShoppingEstimateService estimates;
 
     @Value("${shopping-diary.prices.max-age-days:7}")
     private int maxPriceAgeDays;
@@ -481,25 +482,10 @@ public class ShoppingListService {
     @Transactional(readOnly = true)
     public List<ItemEstimate> estimate(Long userId, Long listId, double lat, double lon, double radius) {
         ownedList(userId, listId);
-        if (!Double.isFinite(lat) || !Double.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180
-                || !Double.isFinite(radius) || radius <= 0 || radius > 100) {
-            throw new IllegalArgumentException("Invalid shopping location or radius");
-        }
-        return jdbc.query("""
-            WITH nearby AS (
-                SELECT s.id, s.name FROM stores s JOIN retailers r ON r.id = s.retailer_id
-                WHERE s.active AND r.active AND upper(s.store_code) IS DISTINCT FROM 'ONLINE'
-                  AND ST_DWithin(s.location::geography, ST_SetSRID(ST_MakePoint(:lon,:lat),4326)::geography, :radius)
-            )
-            SELECT DISTINCT ON (li.id) li.id AS item_id, s.id AS store_id, s.name, offer.product_id,
-                offer.product_name, offer.total
-            FROM shopping_list_items li CROSS JOIN nearby s
-            CROSS JOIN LATERAL shopping_list_item_offer(li, s.id, :age) offer
-            WHERE li.list_id = :list
-            ORDER BY li.id, offer.total, (offer.product_id = li.product_id) DESC, s.id
-            """, Map.of("lat", lat, "lon", lon, "radius", radius * 1000, "age", maxPriceAgeDays, "list", listId),
-                (rs, row) -> new ItemEstimate(rs.getLong("item_id"), rs.getLong("store_id"), rs.getString("name"),
-                        rs.getLong("product_id"), rs.getString("product_name"), rs.getBigDecimal("total")));
+        return estimates.estimate(userId, List.of(listId), lat, lon, radius, null, false).stream()
+                .filter(line -> line.total() != null)
+                .map(line -> new ItemEstimate(line.itemId(), line.storeId(), line.storeName(),
+                        line.productId(), line.productName(), line.total())).toList();
     }
 
     private ShoppingList ownedList(Long userId, Long listId) {

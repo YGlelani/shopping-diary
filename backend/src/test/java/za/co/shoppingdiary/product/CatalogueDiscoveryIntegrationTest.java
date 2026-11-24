@@ -35,6 +35,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
     "spring.datasource.url=jdbc:postgresql://127.0.0.1:55436/discovery_test",
     "spring.datasource.username=postgres",
     "spring.datasource.password=discovery_test",
+    "spring.flyway.url=jdbc:postgresql://127.0.0.1:55436/discovery_test",
+    "spring.flyway.user=postgres",
+    "spring.flyway.password=discovery_test",
     "spring.data.redis.host=127.0.0.1",
     "spring.data.redis.port=56379",
     "app.jwt.secret=bG9jYWwtdGVzdC1zaWduaW5nLWtleS13aXRoLWF0LWxlYXN0LTMyLWJ5dGVz",
@@ -530,6 +533,118 @@ class CatalogueDiscoveryIntegrationTest {
                 .andExpect(jsonPath("$.recommendation.grandTotal").value(40))
                 .andExpect(jsonPath("$.recommendation.items[0].substitutedFor").value("Whole Wheat Bread"));
     }
+
+    @Test
+    void persistsOwnedBudgetsAndKeepsActualPurchasesSeparateFromPlans() throws Exception {
+        String owner = register("budget-owner@example.test");
+        String other = register("budget-other@example.test");
+        String list = newList(owner, "Grocery basket");
+        String second = newList(owner, "Additional basket");
+        String foreign = newList(other, "Private basket");
+        String today = java.time.LocalDate.now(java.time.ZoneId.of("Africa/Johannesburg")).toString();
+        String body = """
+            {"name":"Weekly groceries","amount":"500.00","period":"WEEKLY","startsOn":"%s","listIds":[%s,%s,%s]}
+            """.formatted(today, list, list, second);
+        String key = java.util.UUID.randomUUID().toString();
+        String base = "/api/v1/budgets/" + budgetPost("/api/v1/budgets", owner, body, key);
+        org.junit.jupiter.api.Assertions.assertEquals(base, "/api/v1/budgets/" + budgetPost("/api/v1/budgets", owner, body, key));
+        mvc.perform(post("/api/v1/budgets").header("Authorization", owner).contentType("application/json")
+                .content(body.replace("[" + list + "," + list + "," + second + "]", "[" + foreign + "]")))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(base).header("Authorization", other)).andExpect(status().isNotFound());
+        mvc.perform(get(base + "/estimate").header("Authorization", other)).andExpect(status().isNotFound());
+        mvc.perform(get(base)).andExpect(status().isForbidden());
+        mvc.perform(get(base).header("Authorization", owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.budget.amount").value(500))
+                .andExpect(jsonPath("$.listIds.length()").value(2));
+
+        mvc.perform(get(base + "/estimate").header("Authorization", owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.assessment.status").value("EMPTY"));
+        String expense = """
+            {"description":"Receipt","category":"Dairy","amount":"472.19","purchasedOn":"%s","listId":%s,"branchId":%d}
+            """.formatted(today, list, storeId);
+        String expenseKey = java.util.UUID.randomUUID().toString();
+        String expenseId = budgetPost(base + "/expenses", owner, expense, expenseKey);
+        org.junit.jupiter.api.Assertions.assertEquals(expenseId, budgetPost(base + "/expenses", owner, expense, expenseKey));
+        mvc.perform(get(base).header("Authorization", owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.actualSpent").value(472.19))
+                .andExpect(jsonPath("$.actualRemaining").value(27.81)).andExpect(jsonPath("$.expenseCount").value(1))
+                .andExpect(jsonPath("$.spendingByCategory[0].total").value(472.19))
+                .andExpect(jsonPath("$.expenses[0].branchName").value("Test Checkers"));
+        mvc.perform(put(base + "/expenses/" + expenseId).param("revision", "0").header("Authorization", owner)
+                .contentType("application/json").content(expense.replace("472.19", "450.01"))).andExpect(status().isNoContent());
+        mvc.perform(put(base + "/expenses/" + expenseId).param("revision", "0").header("Authorization", owner)
+                .contentType("application/json").content(expense)).andExpect(status().isConflict());
+        mvc.perform(delete(base + "/expenses/" + expenseId).param("revision", "1").header("Authorization", other))
+                .andExpect(status().isNotFound());
+        mvc.perform(put(base).param("revision", "0").header("Authorization", owner)
+                .contentType("application/json").content(body.replace("500.00", "1500.00"))).andExpect(status().isNoContent());
+        mvc.perform(get("/api/v1/budgets").header("Authorization", owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].amount").value(1500)).andExpect(jsonPath("$[0].actualRemaining").value(1049.99));
+        mvc.perform(post(base + "/archive").param("revision", "1").header("Authorization", owner))
+                .andExpect(status().isNoContent());
+        mvc.perform(get(base + "/estimate").header("Authorization", owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.snapshot").value(true)).andExpect(jsonPath("$.assessment.status").value("EMPTY"));
+
+        String copied = "/api/v1/budgets/" + budgetPost(base + "/reuse", owner,
+                "{\"name\":\"Next week\",\"startsOn\":\"" + today + "\"}", java.util.UUID.randomUUID().toString());
+        mvc.perform(get(copied).header("Authorization", owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.budget.amount").value(1500)).andExpect(jsonPath("$.listIds.length()").value(2))
+                .andExpect(jsonPath("$.expenseCount").value(0));
+        mvc.perform(post(copied + "/expenses").header("Authorization", owner).header("Idempotency-Key", expenseKey)
+                .contentType("application/json").content(expense)).andExpect(status().isConflict());
+        mvc.perform(delete(copied).param("revision", "0").header("Authorization", owner)).andExpect(status().isNoContent());
+    }
+
+    @Test
+    void qualifiesBudgetCoveragePromotionsQuantitiesAndLocation() throws Exception {
+        String owner = register("budget-prices@example.test");
+        String listId = newList(owner, "Bread and more");
+        String list = "/api/v1/lists/" + listId;
+        String today = java.time.LocalDate.now(java.time.ZoneId.of("Africa/Johannesburg")).toString();
+        String base = "/api/v1/budgets/" + budgetPost("/api/v1/budgets", owner,
+                """
+                {"name":"Trip","amount":500,"period":"TRIP","startsOn":"%s","listIds":[%s]}
+                """.formatted(today, listId), java.util.UUID.randomUUID().toString());
+        observe("CURRENT_TIMESTAMP - interval '1 hour'", 300, null, "IN_STOCK", "VERIFIED", "budget-bread");
+        jdbc.update("""
+            INSERT INTO promotions (product_id,store_id,promo_type,promo_price,min_quantity,start_date,end_date,status)
+            VALUES (?,?,'MULTIBUY',450,2,CURRENT_DATE-1,CURRENT_DATE+1,'ACTIVE'),
+                   (?,?,'DISCOUNT',1,1,CURRENT_DATE-7,CURRENT_DATE-2,'ACTIVE')
+            """, breadId, storeId, breadId, storeId);
+        mvc.perform(post(list + "/items").header("Authorization", owner).contentType("application/json")
+                .content("{\"productId\":" + breadId + ",\"quantity\":2}")).andExpect(status().isCreated());
+        var local = get(base + "/estimate").header("Authorization", owner).param("lat", "-26").param("lon", "28");
+        mvc.perform(local).andExpect(status().isOk())
+                .andExpect(jsonPath("$.assessment.status").value("WITHIN_BUDGET"))
+                .andExpect(jsonPath("$.assessment.knownSubtotal").value(450))
+                .andExpect(jsonPath("$.lines[0].promotionEndsOn").exists());
+        mvc.perform(post(list + "/items").header("Authorization", owner).contentType("application/json")
+                .content("{\"customName\":\"Loose produce\",\"quantity\":1,\"unit\":\"kg\"}")).andExpect(status().isCreated());
+        mvc.perform(local).andExpect(status().isOk()).andExpect(jsonPath("$.assessment.status").value("INCOMPLETE"))
+                .andExpect(jsonPath("$.assessment.remainingAfterKnown").value(50))
+                .andExpect(jsonPath("$.assessment.unpriced").value(1)).andExpect(jsonPath("$.lines[1].total").doesNotExist());
+        mvc.perform(get(base + "/estimate").header("Authorization", owner).param("lat", "-33").param("lon", "18"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.assessment.status").value("INSUFFICIENT_PRICES"))
+                .andExpect(jsonPath("$.assessment.knownSubtotal").doesNotExist());
+        var state = detail(list, owner);
+        mvc.perform(put(list + "/items/" + state.path("items").get(0).path("id").asText())
+                .param("revision", state.path("revision").asText()).header("Authorization", owner).contentType("application/json")
+                .content("{\"productId\":" + breadId + ",\"quantity\":3}")).andExpect(status().isOk());
+        mvc.perform(local).andExpect(status().isOk()).andExpect(jsonPath("$.assessment.status").value("OVER_BUDGET"))
+                .andExpect(jsonPath("$.assessment.knownSubtotal").value(750))
+                .andExpect(jsonPath("$.assessment.overBy").value(250));
+        jdbc.update("UPDATE promotions SET start_date=CURRENT_DATE-3,end_date=CURRENT_DATE-1 WHERE product_id=?", breadId);
+        mvc.perform(local).andExpect(status().isOk()).andExpect(jsonPath("$.assessment.knownSubtotal").value(900))
+                .andExpect(jsonPath("$.lines[0].promotionEndsOn").doesNotExist());
+    }
+
+    private String budgetPost(String path, String token, String body, String key) throws Exception {
+        return json.readTree(mvc.perform(post(path).header("Authorization", token).header("Idempotency-Key", key)
+                .contentType("application/json").content(body)).andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString()).path("id").asText();
+    }
+
 
     private String newList(String token, String name) throws Exception {
         String body = json.writeValueAsString(java.util.Map.of("name", name, "description", "Planning", "budgetAmount", 100));
