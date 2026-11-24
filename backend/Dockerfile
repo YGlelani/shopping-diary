@@ -1,33 +1,47 @@
+
 # ==========================================
-# Stage 1: Build the application
+# Stage 1: Build Spring Boot application
 # ==========================================
 FROM maven:3.9-eclipse-temurin-21 AS build
+
 WORKDIR /app
 
-# Copy the pom.xml and download dependencies first (for Docker layer caching)
+# Cache Maven dependencies
 COPY pom.xml .
-RUN mvn -B -q dependency:go-offline
+RUN mvn -B dependency:go-offline
 
-# Copy the source code and build the JAR
+# Copy source files
 COPY src ./src
-RUN mvn -B -q clean package -DskipTests
+
+# Build application
+RUN mvn -B clean package -DskipTests
+
 
 # ==========================================
-# Stage 2: Create the lightweight runtime image
+# Stage 2: Production runtime
 # ==========================================
 FROM eclipse-temurin:21-jre-alpine
+
 WORKDIR /app
 
-# Create a non-root user for security
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-USER appuser
+# Create non-root application user
+RUN addgroup -S appgroup && \
+    adduser -S appuser -G appgroup
 
-# Copy the built JAR from the build stage
-# Using *.jar ensures we don't have to hardcode the version number
-COPY --from=build /app/target/*.jar app.jar
+# Copy Spring Boot JAR
+COPY --from=build /app/target/*.jar /app/app.jar
 
-# Expose the default Spring Boot port
+# Application configuration
+ENV SERVER_PORT=8080
+
+# JVM memory management for small containers
+ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=65.0 -XX:+UseSerialGC -Djava.security.egd=file:/dev/./urandom"
+
+# Expose Spring Boot port
 EXPOSE 8080
 
-# The crucial fix for Render: MaxRAMPercentage limits JVM heap to 75% of 512MB
-ENTRYPOINT ["sh", "-c", "java -XX:MaxRAMPercentage=75.0 -XX:+UseSerialGC -Djava.security.egd=file:/dev/./urandom -jar app.jar"]
+# Run as non-root user
+USER appuser
+
+# Start application
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
