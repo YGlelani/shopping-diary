@@ -324,6 +324,93 @@ class CatalogueDiscoveryIntegrationTest {
             """, Integer.class, storeId));
     }
 
+    @Test
+    void findsSmallTownsAndProvincesWithoutRegisteredBranches() throws Exception {
+        String token = register("locality-search@example.test");
+        mvc.perform(get("/api/v1/stores/provinces").header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(9));
+        mvc.perform(get("/api/v1/stores/areas").param("q", "Bergville").param("province", "KwaZulu-Natal")
+                .header("Authorization", token)).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].city").value("Bergville"))
+                .andExpect(jsonPath("$[0].province").value("KwaZulu-Natal"));
+        mvc.perform(get("/api/v1/stores/areas").param("q", "0002").header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].kind").value("POSTAL"));
+    }
+
+    @Test
+    void nearbyUsesSpheroidDistanceAndDistinguishesStaleAndUnpricedBranches() throws Exception {
+        String token = register("branch-coverage@example.test");
+        long stale = addBranch("Historical branch", "boxer", 28.02);
+        observe("CURRENT_TIMESTAMP - interval '1 hour'", 30, null, "IN_STOCK", "VERIFIED", "current-test");
+        jdbc.update("""
+            INSERT INTO price_observations (product_id, store_id, shelf_price, source_type, observed_at,
+                                          stock_status, verification_status, content_hash)
+            VALUES (?, ?, 20, 'RECEIPT', CURRENT_TIMESTAMP - interval '5 days', 'IN_STOCK', 'VERIFIED', 'stale-test')
+            """, breadId, stale);
+        long unpriced = addBranch("No price branch", "boxer", 28.04);
+        addBranch("Excluded distant branch", "boxer", 29.0);
+        mvc.perform(get("/api/v1/stores/nearby").header("Authorization", token)
+                .param("lat", "-26").param("lon", "28").param("r", "5"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$[0].id").value(storeId))
+                .andExpect(jsonPath("$[0].eligibleProducts").value(1))
+                .andExpect(jsonPath("$[1].id").value(stale))
+                .andExpect(jsonPath("$[1].distanceKm", org.hamcrest.Matchers.closeTo(2.00, 0.03)))
+                .andExpect(jsonPath("$[1].recordedProducts").value(1))
+                .andExpect(jsonPath("$[1].recentProducts").value(0))
+                .andExpect(jsonPath("$[2].id").value(unpriced))
+                .andExpect(jsonPath("$[2].recordedProducts").value(0));
+        mvc.perform(get("/api/v1/stores/nearby").header("Authorization", token)
+                .param("lat", "-26").param("lon", "28").param("r", "2.5").param("priced", "false"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(stale));
+        mvc.perform(get("/api/v1/stores/nearby").header("Authorization", token)
+                .param("lat", "-26").param("lon", "28").param("productId", String.valueOf(breadId)).param("sort", "price"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].productPrice").value(30));
+        mvc.perform(get("/api/v1/stores/" + storeId + "/offers").header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].productId").value(breadId))
+                .andExpect(jsonPath("$[0].effectivePrice").value(30));
+        mvc.perform(get("/api/v1/stores/" + stale + "/observations").header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].shelfPrice").value(20));
+        mvc.perform(get("/api/v1/stores/" + stale + "/offers").header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/v1/stores/" + unpriced).header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.distanceKm").doesNotExist());
+        mvc.perform(get("/api/v1/stores/nearby").header("Authorization", token).param("lat", "NaN").param("lon", "28"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void requiresAdminReviewBeforePublishingBranchProposals() throws Exception {
+        String token = register("branch-suggestion@example.test");
+        long retailerId = jdbc.queryForObject("SELECT id FROM retailers WHERE slug = 'boxer'", Long.class);
+        String payload = json.writeValueAsString(java.util.Map.of("retailerId", retailerId, "name", "Fixture Branch",
+                "address", "Fixture address", "city", "Bergville", "province", "KwaZulu-Natal",
+                "lat", -28.73, "lon", 29.35, "sourceUrl", "https://example.test/branch"));
+        mvc.perform(post("/api/v1/stores/submissions").header("Authorization", token)
+                .contentType("application/json").content(payload)).andExpect(status().isOk());
+        mvc.perform(post("/api/v1/stores/submissions").header("Authorization", token)
+                .contentType("application/json").content(payload)).andExpect(status().isBadRequest());
+        long proposalId = jdbc.queryForObject("SELECT id FROM branch_directory_submissions WHERE name = 'Fixture Branch'", Long.class);
+        mvc.perform(post("/api/v1/admin/directory/submissions/" + proposalId).param("approve", "true")
+                .header("Authorization", token)).andExpect(status().isForbidden());
+        String requestPath = "/api/v1/stores/nearby";
+        mvc.perform(get(requestPath).header("Authorization", token).param("lat", "-28.73").param("lon", "29.35").param("r", "2"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+
+        var admin = new User();
+        admin.setId(1L);
+        admin.setEmail("branch-admin@example.test");
+        admin.setDisplayName("Branch Admin");
+        admin.setRole(Role.ADMIN);
+        mvc.perform(post("/api/v1/admin/directory/submissions/" + proposalId).param("approve", "true")
+                .header("Authorization", "Bearer " + jwt.issue(admin))).andExpect(status().isOk());
+        mvc.perform(get(requestPath).header("Authorization", token).param("lat", "-28.73").param("lon", "29.35").param("r", "2"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].name").value("Fixture Branch"))
+                .andExpect(jsonPath("$[0].sourceUrl").value("https://example.test/branch"));
+    }
+
     private long addBranch(String name, String slug, double lon) {
         return jdbc.queryForObject("""
             INSERT INTO stores (retailer_id, name, location)

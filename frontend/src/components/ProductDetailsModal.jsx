@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { X, TrendingDown, Store, MapPin, Bell, Plus } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import PriceContribution from './PriceContribution';
+import { Link } from 'react-router-dom';
 import { apiRequest } from '../api/client';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
@@ -145,6 +146,8 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, radius
             <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
               <Store size={16} /> Current Prices
             </h3>
+            <Link className="mb-3 inline-block text-sm text-emerald-800 underline" to="/stores"
+              state={{ productId: product.productId, productName: product.canonicalName }}>Find branches with this product</Link>
             {hasLocation && (
               <form className="mb-4 grid gap-2 text-sm sm:grid-cols-3" onSubmit={event => {
                 event.preventDefault();
@@ -192,7 +195,7 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, radius
                     {currentPrices.slice(0, 25).map(p => (
                       <tr key={p.storeId} className="grid grid-cols-2 gap-2 p-3 hover:bg-gray-50 sm:table-row sm:p-0">
                         <td className="order-1 block sm:table-cell sm:px-4 sm:py-3">
-                          <p className="font-medium text-gray-900">{p.storeName}</p>
+                          <Link className="font-medium text-emerald-800 underline" to={'/stores/' + p.storeId}>{p.storeName}</Link>
                           <p className="text-xs text-gray-600 flex items-center gap-2">
                             {p.retailerLogoUrl && <img className="h-5 w-9 object-contain" src={p.retailerLogoUrl} alt="" />}
                             {p.retailerName}

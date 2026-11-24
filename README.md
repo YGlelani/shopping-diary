@@ -99,3 +99,39 @@ A fresh database includes three locator-backed branches across two brands and ze
 - Community shelf prices require a branch, timestamp, stock confirmation and admin approval. The optional reference can identify receipt or shelf-label evidence for the reviewer. Pending submissions stay outside price comparisons.
 - ReefAPI promotion imports require a confirmed branch and a trusted product alias. Admins can create an alias matching the exact feed name to a verified catalogue barcode. LoyaltyHub's online observations, historical HDX prices, and Open Food Facts catalogue records do not supply branch offers. Retailer-wide advertisements require branch confirmation before they can enter the comparison. Live coverage depends on approved data sources and branch onboarding.
 - Phase 2 adds V11 for shared price rules, V12 for the retailer directory, V13 for submissions, V14 for locator-backed branches, and V15 for counted package sizes. Run the isolated PostGIS test command above, then lint and build the frontend. Snapshot staging first and verify existing branches, offers, and the admin moderation queue. Release the backend and migrations before the frontend. To roll back, restore the earlier application builds and retain the additive migrations and observation history. Use a database restore only after reconciling writes made since the snapshot.
+
+### Location-aware store discovery
+
+Nearby Stores supports a confirmed town, suburb, province, shopping area, postcode, or manually entered coordinate. The GeoNames directory is bundled with the backend and can resolve places without registered stores. GPS is requested on demand as a single reading. Denied permission, timeouts, unavailable services and readings with an uncertainty radius above 1 km leave manual selection available.
+
+The active shopping location is held in memory and shared by Discover, branch comparisons and Basket Optimiser. Clearing the location or leaving the app session removes it. The app clears the old local-storage location and does not create a location history. Nearby and comparison requests send coordinates to the Shopping Diary API. The map is opt-in and requests tiles covering the viewed area. Opening directions passes the branch pin to the map provider.
+
+Nearby branches use PostGIS spheroid distance in metres and return kilometres. The list labels the straight-line distance. Basket transport estimates use a separate straight-line round trip for each branch. External directions handle travel routes. Price coverage counts distinct recorded products separately from eligible and verified eligible products, using the shared Phase 2 pricing rules. A physical branch can appear with no observations and an unknown operating schedule.
+
+#### Geography and branch sources
+
+The bundled GeoNames snapshot contains 17,467 reference records from the South African gazetteer and postal downloads. It retains populated places, primary administrative regions, shopping features and geocoded postcodes. The display uses provinces and available district names for disambiguation. Postal rows include province only when the exact locality name maps to one province in the gazetteer. Scores prefer exact names and then larger localities. Reference points are approximate locality or postcode centres. [GeoNames data downloads and CC BY 4.0 terms](https://www.geonames.org/export/)
+
+The baseline now contains 20 supported brands and seven pinned branches across two brands and six provinces when installed on an empty database. V18 adds four manually checked Food Lover's Market branches using addresses and place pins from their official locators. The additions skip likely duplicate sites and supply no test prices. Live branch and price coverage varies by area. Import approved retailer locator data or propose a branch with source evidence. An administrator verifies the retailer, coordinates and physical address before publishing. Existing admin branch edits preserve the branch ID and its price history. [Polokwane](https://foodloversmarket.co.za/stores/limpopo/food-lovers-market-the-farmyard/) · [Mbombela](https://foodloversmarket.co.za/stores/mpumalanga/food-lovers-market-nelspruit/) · [Kimberley](https://foodloversmarket.co.za/stores/northern-cape/food-lovers-market-kimberley/) · [Bloemfontein](https://foodloversmarket.co.za/stores/free-state/food-lovers-market-showgate/)
+
+#### API and rollout
+
+These routes use the app's existing store access rules.
+
+| Method and route | Parameters and result |
+| --- | --- |
+| GET /api/v1/stores/provinces | Nine province labels |
+| GET /api/v1/stores/areas | q and optional province. Up to 20 reference points with ID, name, province, area, coordinates and kind |
+| GET /api/v1/stores/nearby | lat, lon, r in kilometres, optional retailer slug, area, priced, promotions and exact productId. sort accepts distance, freshness, name or price. Price sorting requires a product ID. offset and limit page the original array response |
+| GET /api/v1/stores/{id} | Branch metadata and coverage. Pass both lat and lon to include distance |
+| GET /api/v1/stores/{id}/offers | Paged eligible prices and a representative active promotion per product |
+| GET /api/v1/stores/{id}/observations | Paged recorded shelf observations, separate from current offers |
+| POST /api/v1/stores/submissions | Authenticated branch proposal with retailer ID, physical address, coordinates and HTTPS evidence |
+| GET /api/v1/admin/directory/submissions | Pending branch proposals |
+| POST /api/v1/admin/directory/submissions/{id} | Admin approve or reject with the approve query parameter |
+
+The feature reuses React Leaflet and PostGIS. The default raster map is best-effort with OpenStreetMap attribution. Deployment can set VITE_MAP_TILE_URL and VITE_MAP_ATTRIBUTION to a compatible tile provider. Vite values are public browser configuration. Store secret keys outside these variables. A commercial tile provider may charge by usage. Geocoding uses no runtime service or key. [OpenStreetMap tile policy](https://operations.osmfoundation.org/policies/tiles/)
+
+Run the isolated PostGIS integration suite and the frontend lint and build above. Apply V16 through V18 to staging and confirm map, list, branch moderation and existing price-comparison workflows. V16 adds branch contact and provenance fields and a branch-first price index. V17 adds the pending directory queue. V18 adds verified locator records. Deploy the API and migrations before the frontend. For rollback, restore the earlier frontend and API artifacts and retain the additive migrations and branch records. Check the index build time against staging data before releasing.
+
+For the browser smoke test, start an API bound to loopback port 18081 against the disposable database. Allow the Vite origin at http://localhost:55175 and point VITE_API_URL at http://127.0.0.1:18081/api/v1. Set VITE_MAP_TILE_URL to http://localhost:55175/test-map-tiles/{z}/{x}/{y}.png to exercise tile failure. Launch Chrome with a temporary profile and a loopback DevTools port of 59223, then run node frontend/scripts/location-smoke.mjs from the repository root. The test uses simulated GPS callbacks and writes screenshots to backend/target.

@@ -9,6 +9,7 @@ const REVIEWS = '/admin/price-submissions';
 export default function RetailDirectoryPanel({ token }) {
   const [directory, setDirectory] = useState([]);
   const [branches, setBranches] = useState([]);
+  const [proposals, setProposals] = useState([]);
   const [reviews, setReviews] = useState([]);
   const [retailerId, setRetailerId] = useState('');
   const [branchId, setBranchId] = useState('');
@@ -26,6 +27,7 @@ export default function RetailDirectoryPanel({ token }) {
     }
     apiRequest(BASE, options, token).then(setDirectory).catch(report);
     apiRequest(REVIEWS, options, token).then(setReviews).catch(report);
+    apiRequest(BASE + '/submissions', options, token).then(setProposals).catch(report);
     if (retailerId) apiRequest(BASE + '/' + retailerId + '/branches', options, token).then(setBranches).catch(report);
     return () => controller.abort();
   }, [retailerId, revision, token]);
@@ -61,7 +63,8 @@ export default function RetailDirectoryPanel({ token }) {
     save(branchId ? target + '?' + new URLSearchParams({ branchId }) : target, {
       method: 'PUT',
       body: JSON.stringify({ name: data.get('name'), address: data.get('address'), city: data.get('city'),
-        province: data.get('province'), lat: data.get('lat'), lon: data.get('lon'), active: data.has('active') }),
+        province: data.get('province'), phone: data.get('phone'), hoursText: data.get('hoursText'),
+        sourceUrl: data.get('sourceUrl'), postalCode: data.get('postalCode'), lat: data.get('lat'), lon: data.get('lon'), active: data.has('active') }),
     });
   }
 
@@ -102,6 +105,10 @@ export default function RetailDirectoryPanel({ token }) {
               ['city', 'Town or city'], ['province', 'Province'], ['lat', 'Latitude'], ['lon', 'Longitude'],
             ].map(([name, label]) => <label key={name}>{label}<Input name={name} required defaultValue={branch?.[name]}
                 readOnly={name === 'code' && Boolean(branch?.code)} type={['lat', 'lon'].includes(name) ? 'number' : 'text'} step="any" /></label>)}
+            <label>Verified phone<Input name="phone" type="tel" maxLength={50} defaultValue={branch?.phone} /></label>
+            <label>Published opening hours<Input name="hoursText" maxLength={500} defaultValue={branch?.hoursText} /></label>
+            <label>Official branch source URL<Input name="sourceUrl" type="url" maxLength={500} defaultValue={branch?.sourceUrl} /></label>
+            <label>Postal code<Input name="postalCode" maxLength={10} defaultValue={branch?.postalCode} /></label>
             <label><input name="active" type="checkbox" defaultChecked={branch?.active ?? true} /> Active branch</label>
             <Button type="submit" disabled={busy}>Save branch</Button>
           </form>
@@ -119,6 +126,19 @@ export default function RetailDirectoryPanel({ token }) {
           </form>
         </div>
       )}
+      <div className="space-y-2 border-t pt-3">
+        <h3 className="font-semibold">Pending branch proposals</h3>
+        {proposals.length === 0 && <p className="text-sm text-gray-600">No pending branches.</p>}
+        {proposals.map(row => <div key={row.id} className="space-y-2 rounded border p-3 text-sm">
+          <p><strong>{row.name}</strong> ? {row.retailer}</p>
+          <p>{[row.address, row.city, row.province].join(', ')} ? {row.lat}, {row.lon}</p>
+          <a href={row.sourceUrl} target="_blank" rel="noreferrer" className="underline">Review location evidence</a>
+          <div className="flex flex-wrap gap-2">
+            <Button disabled={busy} onClick={() => save(BASE + '/submissions/' + row.id + '?approve=true', { method: 'POST' })}>Verify and register</Button>
+            <Button variant="secondary" disabled={busy} onClick={() => save(BASE + '/submissions/' + row.id + '?approve=false', { method: 'POST' })}>Reject</Button>
+          </div>
+        </div>)}
+      </div>
       <div className="space-y-2 border-t pt-3">
         <h3 className="font-semibold">Pending branch prices</h3>
         {reviews.length === 0 && <p className="text-sm text-gray-600">No pending contributions.</p>}

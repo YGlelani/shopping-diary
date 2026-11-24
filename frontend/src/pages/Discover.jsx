@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { MapPin, Plus, Search } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Card, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -14,9 +14,11 @@ const selectClass = 'w-full rounded-lg border border-gray-300 bg-white px-3 py-2
 const initialFilters = { q: '', category: '', brand: '', size: '', priced: '' };
 
 export default function Discover({ token, onAddItem, location, radius, onRadiusChange }) {
+  const [params] = useSearchParams();
+  const q = params.get('q')?.slice(0, 120) ?? '';
   return (
-    <DiscoverContent
-      key={[location?.lat, location?.lon].join(':')}
+    <DiscoverContent initialQuery={q}
+      key={[location?.lat, location?.lon, q].join(':')}
       token={token}
       onAddItem={onAddItem}
       location={location}
@@ -26,9 +28,9 @@ export default function Discover({ token, onAddItem, location, radius, onRadiusC
   );
 }
 
-function DiscoverContent({ token, onAddItem, location, radius, onRadiusChange }) {
-  const [filters, setFilters] = useState(initialFilters);
-  const [request, setRequest] = useState({ filters: initialFilters, offset: 0 });
+function DiscoverContent({ token, onAddItem, location, radius, onRadiusChange, initialQuery }) {
+  const [filters, setFilters] = useState({ ...initialFilters, q: initialQuery });
+  const [request, setRequest] = useState({ filters, offset: 0 });
   const [departments, setDepartments] = useState([]);
   const [categoryError, setCategoryError] = useState(false);
   const [response, setResponse] = useState(null);
@@ -143,7 +145,7 @@ function DiscoverContent({ token, onAddItem, location, radius, onRadiusChange })
               onRadiusChange(Number(event.target.value));
               setRequest(current => ({ ...current, offset: 0 }));
             }} className="ml-2 rounded border p-1">
-              {[5, 10, 15, 25, 50, 100].map(km => <option key={km} value={km}>{km} km</option>)}
+              {[2, 5, 10, 15, 25, 50, 100].map(km => <option key={km} value={km}>{km} km</option>)}
             </select>
           </label>}
           {categoryError && <p role="status" className="mt-2 text-sm text-gray-600">Department filters could not load.</p>}

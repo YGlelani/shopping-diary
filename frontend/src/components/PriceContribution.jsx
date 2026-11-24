@@ -3,21 +3,21 @@ import { apiRequest } from '../api/client';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 
-export default function PriceContribution({ productId, lat, lon, radiusKm, token }) {
+export default function PriceContribution({ productId, lat, lon, radiusKm, token, branch }) {
   const [open, setOpen] = useState(false);
   const [branches, setBranches] = useState(null);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || branch) return;
     const controller = new AbortController();
     const params = new URLSearchParams({ lat, lon, r: radiusKm });
     apiRequest('/stores/nearby?' + params, { signal: controller.signal }, token)
       .then(rows => { if (!controller.signal.aborted) setBranches(rows); })
       .catch(error => { if (!controller.signal.aborted) setMessage(error.message); });
     return () => controller.abort();
-  }, [open, lat, lon, radiusKm, token]);
+  }, [open, lat, lon, radiusKm, token, branch]);
 
   async function submit(event) {
     event.preventDefault();
@@ -41,13 +41,14 @@ export default function PriceContribution({ productId, lat, lon, radiusKm, token
     }
   }
 
+  const availableBranches = branch ? [branch] : branches;
   return (
     <section className="space-y-2">
       <Button variant="secondary" aria-expanded={open} onClick={() => setOpen(value => !value)}>Contribute a branch price</Button>
-      {open && branches?.length > 0 && (
+      {open && availableBranches?.length > 0 && (
         <form onSubmit={submit} className="grid gap-2 text-sm sm:grid-cols-2">
           <label>Branch<select name="storeId" required className="block w-full rounded border p-2">
-            {branches.map(branch => <option key={branch.id} value={branch.id}>{branch.retailer} · {branch.name}</option>)}
+            {availableBranches.map(branch => <option key={branch.id} value={branch.id}>{branch.retailer} · {branch.name}</option>)}
           </select></label>
           <label>Shelf price (R)<Input name="price" required type="number" min="0.01" max="99999999.99" step="0.01" /></label>
           <label>When observed<Input name="observedAt" required type="datetime-local" /></label>
@@ -56,7 +57,7 @@ export default function PriceContribution({ productId, lat, lon, radiusKm, token
           <Button type="submit" disabled={busy}>Submit for review</Button>
         </form>
       )}
-      {open && branches?.length === 0 && <p>No nearby branches are registered for contributions.</p>}
+      {open && availableBranches?.length === 0 && <p>No nearby branches are registered for contributions.</p>}
       {message && <p role="status">{message}</p>}
     </section>
   );

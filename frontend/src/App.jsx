@@ -24,41 +24,10 @@ import Admin from './pages/Admin';
 import PriceAlerts from './pages/PriceAlerts';
 import { apiRequest } from './api/client';
 
+const StoreDetails = lazy(() => import('./pages/StoreDetails'));
 const NearbyStores = lazy(
   () => import('./pages/NearbyStores')
 );
-
-const LOCATION_KEY = 'shoppingDiary.location';
-
-function readSavedLocation() {
-  try {
-    const stored = localStorage.getItem(
-      LOCATION_KEY
-    );
-
-    if (!stored) return null;
-
-    const location = JSON.parse(stored);
-
-    const lat = Number(location.lat);
-    const lon = Number(location.lon);
-
-    if (
-      !Number.isFinite(lat) ||
-      !Number.isFinite(lon) ||
-      lat < -90 ||
-      lat > 90 ||
-      lon < -180 ||
-      lon > 180
-    ) {
-      return null;
-    }
-
-    return { lat, lon };
-  } catch {
-    return null;
-  }
-}
 
 export default function App() {
   const [token, setToken] = useState(
@@ -67,6 +36,7 @@ export default function App() {
 
   const handleLogout = useCallback(() => {
     localStorage.removeItem('token');
+    localStorage.removeItem('shoppingDiary.location');
     localStorage.removeItem(
       'shoppingDiary.activeListId'
     );
@@ -93,9 +63,11 @@ function SignedInApp({
   const [listId, setListId] = useState(null);
   const [setupError, setSetupError] = useState('');
 
-  const [location, setLocation] = useState(
-    readSavedLocation
-  );
+  const [location, setLocation] = useState(null);
+
+  useEffect(() => {
+    try { localStorage.removeItem('shoppingDiary.location'); } catch { /* storage unavailable */ }
+  }, []);
 
   const [saving, setSaving] = useState(false);
   const [radius, setRadius] = useState(15);
@@ -107,7 +79,11 @@ function SignedInApp({
   const cart = activeList?.items ?? [];
 
   const changeLocation = useCallback(
-    (lat, lon) => {
+    (lat, lon, label) => {
+      if (lat == null && lon == null) {
+        setLocation(null);
+        return;
+      }
       const latitude = Number(lat);
       const longitude = Number(lon);
 
@@ -125,14 +101,12 @@ function SignedInApp({
       const next = {
         lat: latitude,
         lon: longitude,
+        label,
       };
 
       setLocation(next);
 
-      localStorage.setItem(
-        LOCATION_KEY,
-        JSON.stringify(next)
-      );
+
     },
     []
   );
@@ -439,6 +413,10 @@ function SignedInApp({
                 />
               }
             />
+
+            <Route path="/stores/:id" element={
+              <StoreDetails location={location} token={token} onAddItem={addToCart} />
+            } />
 
             <Route
               path="*"

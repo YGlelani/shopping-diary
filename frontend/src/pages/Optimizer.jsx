@@ -34,7 +34,7 @@ export default function Optimizer({ token, listId, location, budgetAmount, radiu
         </div>
         <h1 className="text-2xl font-bold text-gray-900 mb-2">Basket Optimisation</h1>
         <p className="text-gray-500 mb-8">
-          We will calculate whether buying everything at one store, or splitting your list between multiple stores, will save you the most money after transport costs.
+          We will calculate whether buying everything at one store, or splitting your list between multiple stores, will save you the most money after estimated transport costs based on a separate straight-line round trip for each branch.
         </p>
         {!listId && <Link to="/lists" className="mb-4 text-emerald-700 underline">Create a shopping list</Link>}
         {error && <p className="text-red-600 mb-4">{error}</p>}
@@ -106,7 +106,7 @@ export default function Optimizer({ token, listId, location, budgetAmount, radiu
                     <Store size={18} className="text-emerald-600" />
                     <h4 className="font-bold text-gray-900">{store.storeName}</h4>
                     <span className="text-xs text-gray-500 flex items-center gap-1">
-                      <MapPin size={12} /> {store.distanceKm} km
+                      <MapPin size={12} /> {store.distanceKm} km straight line
                     </span>
                   </div>
                   <p className="font-semibold text-gray-900">R{store.storeSubtotal.toFixed(2)}</p>
@@ -131,7 +131,7 @@ export default function Optimizer({ token, listId, location, budgetAmount, radiu
             <span>R{recommendation.totalProductCost.toFixed(2)}</span>
           </div>
           <div className="flex justify-between text-gray-600">
-            <span>Estimated transport (R{costPerKm.toFixed(2)}/km)</span>
+            <span>Straight-line transport estimate (R{costPerKm.toFixed(2)}/km)</span>
             <span>R{recommendation.totalTransportCost.toFixed(2)}</span>
           </div>
           <div className="flex justify-between font-bold text-gray-900 text-base pt-2">

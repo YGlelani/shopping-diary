@@ -52,7 +52,7 @@ public class RetailDirectoryAdminController {
     @GetMapping("/{retailerId}/branches")
     public List<Branch> branches(@PathVariable long retailerId) {
         return jdbc.sql("""
-            SELECT s.id, s.name, s.store_code AS code, s.address, s.city, s.province, s.active,
+            SELECT s.id, s.name, s.store_code AS code, s.address, s.city, s.province, s.active, s.phone, s.hours_text, s.source_url, s.postal_code,
                    ST_Y(s.location) AS lat, ST_X(s.location) AS lon,
                    (SELECT max(observed_at) FROM price_observations WHERE store_id = s.id
                      AND observed_at <= CURRENT_TIMESTAMP) AS last_observed,
@@ -94,7 +94,9 @@ public class RetailDirectoryAdminController {
                 .addValue("name", input.name()).addValue("address", input.address())
                 .addValue("city", input.city()).addValue("province", input.province())
                 .addValue("lat", input.lat()).addValue("lon", input.lon()).addValue("active", input.active())
-                .addValue("branchId", branchId, java.sql.Types.BIGINT);
+                .addValue("branchId", branchId, java.sql.Types.BIGINT)
+                .addValue("phone", input.phone()).addValue("hours", input.hoursText())
+                .addValue("source", input.sourceUrl()).addValue("postal", input.postalCode());
         boolean duplicate = jdbc.sql("""
             SELECT EXISTS (SELECT 1 FROM stores
               WHERE retailer_id = :retailer
@@ -109,18 +111,22 @@ public class RetailDirectoryAdminController {
             return jdbc.sql("""
                 UPDATE stores SET store_code = :code, name = :name, address = :address,
                     city = :city, province = :province, location = ST_SetSRID(ST_MakePoint(:lon, :lat), 4326),
-                    active = :active
+                    active = :active, phone = coalesce(:phone, phone), hours_text = coalesce(:hours, hours_text),
+                    source_url = coalesce(:source, source_url), postal_code = coalesce(:postal, postal_code)
                 WHERE id = :branchId AND retailer_id = :retailer AND store_code IS DISTINCT FROM 'ONLINE'
                 RETURNING id
                 """).paramSource(parameters).query(Long.class).optional()
                     .orElseThrow(() -> new IllegalArgumentException("Unknown physical branch"));
         }
         return jdbc.sql("""
-            INSERT INTO stores (retailer_id, store_code, name, address, city, province, location, active)
+            INSERT INTO stores (retailer_id, store_code, name, address, city, province, location, active, phone, hours_text, source_url, postal_code)
             VALUES (:retailer, :code, :name, :address, :city, :province,
-                ST_SetSRID(ST_MakePoint(:lon, :lat), 4326), :active)
+                ST_SetSRID(ST_MakePoint(:lon, :lat), 4326), :active, :phone, :hours, :source, :postal)
             ON CONFLICT (retailer_id, store_code) DO UPDATE SET name = excluded.name, address = excluded.address,
-                city = excluded.city, province = excluded.province, location = excluded.location, active = excluded.active
+                city = excluded.city, province = excluded.province, location = excluded.location, active = excluded.active,
+                phone = coalesce(excluded.phone, stores.phone), hours_text = coalesce(excluded.hours_text, stores.hours_text),
+                source_url = coalesce(excluded.source_url, stores.source_url),
+                postal_code = coalesce(excluded.postal_code, stores.postal_code)
             RETURNING id
             """).paramSource(parameters).query(Long.class).single();
     }
@@ -143,12 +149,17 @@ public class RetailDirectoryAdminController {
     public record Coverage(long id, String name, String slug, String website, String logoUrl, boolean active,
                            long branches, long pricedBranches, OffsetDateTime lastObserved, OffsetDateTime lastCollected) {}
     public record Branch(long id, String name, String code, String address, String city, String province, boolean active,
-                         double lat, double lon, OffsetDateTime lastObserved, boolean usable) {}
+                         double lat, double lon, OffsetDateTime lastObserved, boolean usable,
+                         String phone, String hoursText, String sourceUrl, String postalCode) {}
     public record RetailerInput(@NotBlank @Size(max = 100) String name,
             @Size(max = 255) @Pattern(regexp = "https://\\S+") String website,
             @Size(max = 500) @Pattern(regexp = "https://\\S+") String logoUrl, boolean active) {}
     public record BranchInput(@NotBlank @Size(max = 255) String name, @NotBlank @Size(max = 500) String address,
             @NotBlank @Size(max = 100) String city, @NotBlank @Size(max = 100) String province,
             @NotNull @DecimalMin("-90") @DecimalMax("90") BigDecimal lat,
-            @NotNull @DecimalMin("-180") @DecimalMax("180") BigDecimal lon, boolean active) {}
+            @NotNull @DecimalMin("-180") @DecimalMax("180") BigDecimal lon, boolean active,
+            @Size(max = 50) @Pattern(regexp = "[+0-9 ()-]*") String phone,
+            @Size(max = 500) String hoursText,
+            @Size(max = 500) @Pattern(regexp = "https://\\S+|") String sourceUrl,
+            @Size(max = 10) String postalCode) {}
 }
