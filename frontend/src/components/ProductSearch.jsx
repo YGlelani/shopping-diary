@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Search, Plus } from 'lucide-react'; // <-- Import icons
 import { apiRequest } from '../api/client';
+import { formatProductPrice } from '../utils/productFormatting';
 
 // Add onViewDetails prop
 export default function ProductSearch({ onAddProduct, lat, lon, onViewDetails }) {
@@ -11,7 +12,12 @@ export default function ProductSearch({ onAddProduct, lat, lon, onViewDetails })
     e.preventDefault();
     if (!query.trim()) return;
     try {
-      const res = await apiRequest(`/products/search?q=${query}&lat=${lat}&lon=${lon}&r=10`);
+      const params = new URLSearchParams({ q: query.trim(), r: '10' });
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        params.set('lat', lat);
+        params.set('lon', lon);
+      }
+      const res = await apiRequest('/products/search?' + params);
       setResults(res);
     } catch (err) { alert(err.message); }
   };
@@ -35,7 +41,7 @@ export default function ProductSearch({ onAddProduct, lat, lon, onViewDetails })
             <div className="cursor-pointer hover:opacity-70 transition" onClick={() => onViewDetails(p)}>
               <h3 className="font-medium text-sm text-blue-600 hover:underline">{p.canonicalName}</h3>
               <p className="text-xs text-gray-500">{p.brand} • {p.sizeText}</p>
-              <p className="text-sm font-bold mt-1">From R{p.minEffectivePrice}</p>
+              <p className="text-sm font-bold mt-1">{formatProductPrice(p.minEffectivePrice)}</p>
             </div>
             <button onClick={() => onAddProduct(p.productId)} className="bg-blue-50 text-blue-700 px-3 py-1 rounded text-sm font-medium hover:bg-blue-100 flex items-center gap-1">
               <Plus size={16} /> Add

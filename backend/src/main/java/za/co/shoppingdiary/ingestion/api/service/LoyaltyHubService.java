@@ -402,32 +402,24 @@ public class LoyaltyHubService {
             if (!existing.isEmpty()) {
                 return existing.get(0);
             }
-        }
-
-        List<Long> matchingProducts =
-                jdbc.queryForList(
-                        """
-                        SELECT id
-                        FROM products
-                        WHERE lower(canonical_name) =
-                              lower(?)
-                          AND lower(coalesce(brand, '')) =
-                              lower(coalesce(?, ''))
-                          AND (
-                              barcode IS NULL
-                              OR barcode = ?
-                          )
-                        ORDER BY id
-                        LIMIT 1
-                        """,
-                        Long.class,
-                        name,
-                        brand,
-                        barcode
-                );
-
-        if (!matchingProducts.isEmpty()) {
-            return matchingProducts.get(0);
+        } else {
+            List<Long> matchingProducts = jdbc.queryForList(
+                    """
+                    SELECT id
+                    FROM products
+                    WHERE barcode IS NULL
+                      AND lower(canonical_name) = lower(?)
+                      AND lower(coalesce(brand, '')) = lower(coalesce(?, ''))
+                      AND NULLIF(btrim(size_text), '') IS NULL
+                      AND base_quantity IS NULL
+                    ORDER BY id
+                    LIMIT 1
+                    """,
+                    Long.class, name, brand
+            );
+            if (!matchingProducts.isEmpty()) {
+                return matchingProducts.getFirst();
+            }
         }
 
         return jdbc.queryForObject(

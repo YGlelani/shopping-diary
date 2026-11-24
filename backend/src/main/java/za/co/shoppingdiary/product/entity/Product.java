@@ -50,6 +50,12 @@ public class Product {
     @Column(length = 100)
     private String category;
 
+    @Column(name = "catalogue_source_url", length = 1000)
+    private String catalogueSourceUrl;
+
+    @Column(name = "image_source_url", length = 1000)
+    private String imageSourceUrl;
+
     @PrePersist
     void onCreate() {
         this.createdAt = Instant.now();

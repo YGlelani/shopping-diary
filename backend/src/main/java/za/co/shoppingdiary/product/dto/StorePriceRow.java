@@ -2,6 +2,9 @@ package za.co.shoppingdiary.product.dto;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 
 public class StorePriceRow {
 
@@ -16,6 +19,11 @@ public class StorePriceRow {
     private Instant observedAt;
     private String verificationStatus;
     private String stockStatus;
+    private final List<Promotion> promotions = new ArrayList<>();
+
+    public record Promotion(String type, String description, BigDecimal price, Integer minQuantity, LocalDate endsOn) {}
+
+    public List<Promotion> getPromotions() { return promotions; }
 
     public Long getStoreId() { return storeId; }
     public void setStoreId(Long storeId) { this.storeId = storeId; }

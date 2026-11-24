@@ -372,6 +372,9 @@ public class HdxImportService {
                         SELECT id
                         FROM products
                         WHERE canonical_name = ?
+                          AND barcode IS NULL AND brand IS NULL
+                          AND category = 'Staples'
+                          AND base_unit = 'kg' AND base_quantity IS NULL AND size_text IS NULL
                         ORDER BY id
                         LIMIT 1
                         """,

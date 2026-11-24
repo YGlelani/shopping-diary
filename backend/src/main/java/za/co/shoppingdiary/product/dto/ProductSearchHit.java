@@ -2,6 +2,8 @@ package za.co.shoppingdiary.product.dto;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import lombok.Getter;
+import lombok.Setter;
 
 public class ProductSearchHit {
 
@@ -15,7 +17,8 @@ public class ProductSearchHit {
     private Instant latestObservedAt;
     private String imageUrl;
     private String category;
-    // + getters and setters
+    @Getter @Setter private String sourceUrl;
+    @Getter @Setter private String imageSourceUrl;
 
     public Long getProductId() {
         return productId;

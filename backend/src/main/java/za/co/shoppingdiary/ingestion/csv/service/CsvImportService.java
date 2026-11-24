@@ -160,9 +160,11 @@ public class CsvImportService {
         if (barcode != null) {
             var existing = products.findByBarcode(barcode);
             if (existing.isPresent()) return existing.get();
+        } else {
+            var match = products.findFirstByBarcodeIsNullAndCanonicalNameIgnoreCaseAndBrandIgnoreCaseAndSizeTextIgnoreCase(
+                    productName, get(row, "brand"), get(row, "size_text"));
+            if (match.isPresent()) return match.get();
         }
-        var byName = products.findByCanonicalNameIgnoreCase(productName);
-        if (byName.isPresent()) return byName.get();
 
         Product p = new Product();
         p.setCanonicalName(productName);

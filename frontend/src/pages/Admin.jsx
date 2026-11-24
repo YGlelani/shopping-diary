@@ -1,5 +1,6 @@
 
 import { useState } from 'react';
+
 import {
   UploadCloud,
   RefreshCw,
@@ -17,7 +18,10 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { apiRequest } from '../api/client';
 
+import OpenFoodFactsPanel from '../components/admin/OpenFoodFactsPanel';
+
 export default function Admin({ token }) {
+
   const [csvFile, setCsvFile] = useState(null);
   const [uploadStatus, setUploadStatus] = useState('');
 
@@ -33,11 +37,13 @@ export default function Admin({ token }) {
     useState('');
 
   const [reefStatus, setReefStatus] = useState('');
-
-  const [reefResult, setReefResult] =
-    useState(null);
+  const [reefResult, setReefResult] = useState(null);
 
   const [busy, setBusy] = useState('');
+
+  // ---------------------------------------------
+  // CSV IMPORT
+  // ---------------------------------------------
 
   async function handleCsvUpload(event) {
     event.preventDefault();
@@ -71,14 +77,16 @@ export default function Admin({ token }) {
       setCsvFile(null);
 
     } catch (error) {
-      setUploadStatus(
-        `Error: ${error.message}`
-      );
+      setUploadStatus(`Error: ${error.message}`);
 
     } finally {
       setBusy('');
     }
   }
+
+  // ---------------------------------------------
+  // EXTERNAL INGESTION
+  // ---------------------------------------------
 
   async function runSync(
     endpoint,
@@ -96,26 +104,21 @@ export default function Admin({ token }) {
     try {
       const result = await apiRequest(
         endpoint,
-        {
-          method: 'POST',
-        },
+        { method: 'POST' },
         token
       );
 
-      const message =
+      setStatus(
         result?.message ||
-        'Sync completed successfully';
-
-      setStatus(message);
+        'Sync completed successfully'
+      );
 
       if (onSuccess) {
         onSuccess(result);
       }
 
     } catch (error) {
-      setStatus(
-        `Error: ${error.message}`
-      );
+      setStatus(`Error: ${error.message}`);
 
       if (onSuccess) {
         onSuccess(null);
@@ -130,9 +133,7 @@ export default function Admin({ token }) {
     const query = loyaltyQuery.trim();
 
     if (!query) {
-      setLoyaltyStatus(
-        'Enter a search query.'
-      );
+      setLoyaltyStatus('Enter a search query.');
       return;
     }
 
@@ -176,20 +177,32 @@ export default function Admin({ token }) {
     );
   }
 
+  // ---------------------------------------------
+  // ADMIN UI
+  // ---------------------------------------------
+
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
+
       <div>
         <h1 className="text-2xl font-bold text-gray-900">
           Data Ingestion
         </h1>
 
         <p className="text-gray-500 mt-1">
-          Manage products, prices and
-          promotional data sources.
+          Manage products, prices and promotional
+          data sources.
         </p>
       </div>
 
+      {/* Catalogue manager appears locally only */}
+      {import.meta.env.DEV && (
+        <OpenFoodFactsPanel token={token} />
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+        {/* CSV Upload */}
         <Card>
           <CardHeader>
             <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -234,6 +247,7 @@ export default function Admin({ token }) {
           </CardContent>
         </Card>
 
+        {/* LoyaltyHub */}
         <Card>
           <CardHeader>
             <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -277,6 +291,7 @@ export default function Admin({ token }) {
           </CardContent>
         </Card>
 
+        {/* Historical Data */}
         <Card>
           <CardHeader>
             <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -314,6 +329,7 @@ export default function Admin({ token }) {
           </CardContent>
         </Card>
 
+        {/* ReefAPI */}
         <Card>
           <CardHeader>
             <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -324,10 +340,10 @@ export default function Admin({ token }) {
 
           <CardContent className="space-y-4">
             <p className="text-sm text-gray-500">
-              Import supported Pick n Pay
-              promotions for a mapped store.
-              Unsupported, membership-only
-              or ambiguous deals are skipped.
+              Import supported Pick n Pay promotions
+              for a mapped store.
+              Unsupported, membership-only or
+              ambiguous deals are skipped.
             </p>
 
             <div className="space-y-2">
@@ -342,11 +358,15 @@ export default function Admin({ token }) {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700">
+              <label
+                htmlFor="reef-store-code"
+                className="text-sm font-medium text-gray-700"
+              >
                 Pick n Pay store code
               </label>
 
               <Input
+                id="reef-store-code"
                 value={reefStoreCode}
                 onChange={event =>
                   setReefStoreCode(
@@ -357,9 +377,9 @@ export default function Admin({ token }) {
               />
 
               <p className="text-xs text-gray-500">
-                The code must belong to an
-                active Pick n Pay branch
-                already mapped in Shopping Diary.
+                The code must belong to an active
+                Pick n Pay branch already mapped
+                in Shopping Diary.
               </p>
             </div>
 
@@ -391,14 +411,17 @@ export default function Admin({ token }) {
                   Products fetched:{' '}
                   {reefResult.productsFetched ?? 0}
                 </p>
+
                 <p>
                   Matched products:{' '}
                   {reefResult.matchedProducts ?? 0}
                 </p>
+
                 <p>
                   Promotions saved:{' '}
                   {reefResult.promotionsSaved ?? 0}
                 </p>
+
                 <p>
                   Promotions skipped:{' '}
                   {reefResult.promotionsSkipped ?? 0}
@@ -407,6 +430,7 @@ export default function Admin({ token }) {
             )}
           </CardContent>
         </Card>
+
       </div>
     </div>
   );

@@ -234,7 +234,7 @@ function SignedInApp({
     endpoint,
     options
   ) {
-    if (!listId || saving) return;
+    if (!listId || saving) return false;
 
     setSaving(true);
 
@@ -258,9 +258,10 @@ function SignedInApp({
             : list
         )
       );
-
+      return true;
     } catch (error) {
       alert(error.message);
+      return false;
     } finally {
       setSaving(false);
     }
@@ -271,7 +272,7 @@ function SignedInApp({
       alert(
         'Create a shopping list before adding products.'
       );
-      return;
+      return false;
     }
 
     const existingItem = cart.find(
@@ -353,21 +354,7 @@ function SignedInApp({
             <Route
               path="/discover"
               element={
-                location ? (
-                  <Discover
-                    token={token}
-                    onAddItem={addToCart}
-                    location={location}
-                  />
-                ) : (
-                  <Navigate
-                    to="/stores"
-                    state={{
-                      returnTo: '/discover',
-                    }}
-                    replace
-                  />
-                )
+                <Discover token={token} onAddItem={addToCart} location={location} />
               }
             />
 

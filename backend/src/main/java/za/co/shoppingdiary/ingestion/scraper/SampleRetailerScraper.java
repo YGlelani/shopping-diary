@@ -67,19 +67,25 @@ public class SampleRetailerScraper implements RetailerScraper {
     }
 
     private Long findOrCreateProduct(String name, String barcode) {
-        // Try to find by barcode first
-        if (!barcode.isEmpty()) {
-            var ids = jdbc.queryForList("SELECT id FROM products WHERE barcode = ?", Long.class, barcode);
-            if (!ids.isEmpty()) return ids.get(0);
+        if (!barcode.isBlank()) {
+            return jdbc.queryForObject("""
+                INSERT INTO products (canonical_name, barcode) VALUES (?, ?)
+                ON CONFLICT (barcode) DO UPDATE SET barcode = products.barcode
+                RETURNING id
+                """, Long.class, name, barcode);
         }
-        
-        // Try by exact name
-        var nameIds = jdbc.queryForList("SELECT id FROM products WHERE canonical_name = ?", Long.class, name);
-        if (!nameIds.isEmpty()) return nameIds.get(0);
 
-        // Create new product
-        jdbc.update("INSERT INTO products (canonical_name, barcode) VALUES (?, ?)", name, barcode.isEmpty() ? null : barcode);
-        return jdbc.queryForObject("SELECT id FROM products WHERE canonical_name = ?", Long.class, name);
+        var generic = jdbc.queryForList("""
+            SELECT id FROM products
+            WHERE canonical_name = ? AND barcode IS NULL AND brand IS NULL
+              AND NULLIF(btrim(size_text), '') IS NULL AND base_quantity IS NULL
+            ORDER BY id LIMIT 1
+            """, Long.class, name);
+        if (!generic.isEmpty()) {
+            return generic.getFirst();
+        }
+        return jdbc.queryForObject(
+                "INSERT INTO products (canonical_name) VALUES (?) RETURNING id", Long.class, name);
     }
 
     private String sha256(String input) {
