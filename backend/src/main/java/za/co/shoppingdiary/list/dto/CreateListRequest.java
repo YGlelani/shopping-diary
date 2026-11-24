@@ -15,6 +15,20 @@ public class CreateListRequest {
     @DecimalMin("0.00") @Digits(integer = 8, fraction = 2)
     private BigDecimal budgetAmount;
 
+    @Size(max = 1000)
+    @lombok.Getter @lombok.Setter
+    private String description;
+
+    @Size(max = 150)
+    @lombok.Getter @lombok.Setter
+    private String locationLabel;
+
+    @lombok.Getter @lombok.Setter
+    private Double locationLat;
+
+    @lombok.Getter @lombok.Setter
+    private Double locationLon;
+
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
 

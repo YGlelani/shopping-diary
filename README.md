@@ -135,3 +135,33 @@ The feature reuses React Leaflet and PostGIS. The default raster map is best-eff
 Run the isolated PostGIS integration suite and the frontend lint and build above. Apply V16 through V18 to staging and confirm map, list, branch moderation and existing price-comparison workflows. V16 adds branch contact and provenance fields and a branch-first price index. V17 adds the pending directory queue. V18 adds verified locator records. Deploy the API and migrations before the frontend. For rollback, restore the earlier frontend and API artifacts and retain the additive migrations and branch records. Check the index build time against staging data before releasing.
 
 For the browser smoke test, start an API bound to loopback port 18081 against the disposable database. Allow the Vite origin at http://localhost:55175 and point VITE_API_URL at http://127.0.0.1:18081/api/v1. Set VITE_MAP_TILE_URL to http://localhost:55175/test-map-tiles/{z}/{x}/{y}.png to exercise tile failure. Launch Chrome with a temporary profile and a loopback DevTools port of 59223, then run node frontend/scripts/location-smoke.mjs from the repository root. The test uses simulated GPS callbacks and writes screenshots to backend/target.
+
+### Smart shopping lists
+
+Lists and entries use the existing PostgreSQL shopping-list tables. Each list belongs to its authenticated owner and can save a description, budget and explicitly chosen preferred location. Setting no preferred location follows the active shopping location. Archived lists are read-only for item changes until restored. Duplication preserves quantities, notes, brand preferences and approved alternatives and resets all purchases on the new list.
+
+Catalogue quantities are package counts. Custom entries support kilograms, grams, litres and millilitres with up to three decimals, plus whole counts for items, packs, bottles, cartons, bags and dozens. Custom entries are private. Linking a custom entry to a catalogue product converts its unit to packages and requires a compatible whole count. Adding a catalogue product merges only with an unpurchased entry with the same unit, preferences, substitute and notes.
+
+The optimiser and estimates use the same eligible branch offers from Phase 2. A shopper can approve a specific alternative from the same category with the same measured size. This is a manual compatibility choice. The app does not infer ingredient or dietary equivalence. A strict brand preference filters eligible products. When substitutes are allowed, a preferred brand breaks same-branch price ties. Estimates show the lowest available line totals across branches and omit unknown prices from the monetary subtotal. Basket optimisation excludes purchased items and reports unresolved or missing items.
+
+#### List API
+
+Existing create, detail, list, add, increment, remove, basket and optimisation endpoints remain available under /api/v1/lists. Unknown or out-of-scope lists return 404.
+
+| Route | Behaviour |
+| --- | --- |
+| PUT /lists/{id}?revision=… | Save name, description, budget, and preferred location. Optional status sets ACTIVE, ARCHIVED, COMPLETED or DRAFT |
+| POST /lists/{id}/duplicate | Copy a list using the supplied name |
+| POST /lists/{id}/items | Add by productId or customName, with quantity, unit, preferredBrand, flexibleBrand, substituteProductId, notes and purchased |
+| PUT /lists/{id}/items/{itemId}?revision=… | Replace the item settings and update or unlink a catalogue reference |
+| DELETE /lists/{id}/items/purchased?revision=… | Clear purchased entries |
+| GET /lists/{id}/estimate | Best eligible line offers using lat, lon and optional r in kilometres. Entries without a quote are absent |
+| GET /lists/coverage | Counts of priced entries by owned list. Optional lat, lon and r supply the active location when the list has no saved location |
+
+List and item edits use the saved list revision and return 409 when the revision is stale. The UI submits revisions for deletions as well. Create, duplicate and add accept an optional UUID Idempotency-Key and reuse it for retries of the same request. The API returns the saved list or item on a replay while its record exists.
+
+#### Testing and release
+
+V19 adds list metadata, item notes and purchasing status, an approved alternate reference, add-retry tracking and the shared list-offer calculation. It preserves existing items and backfills catalogue names so an item can remain readable if its product is removed later. V20 adds per-owner creation retry keys. Both changes are additive. Run the isolated PostGIS suite and frontend lint and production build above. Deploy the backend with V19 and V20 before the frontend. To roll back, restore the earlier app builds and retain the migrations and saved list data.
+
+The browser demo uses a disposable API on loopback port 18082, Vite on localhost port 55176, Chrome DevTools on loopback port 59224, and the fixture in backend/src/test/resources/shopping-list-browser-fixture.sql applied to the disposable PostGIS database. Run node frontend/scripts/lists-smoke.mjs from the repository root to exercise the flow and write screenshots to backend/target. Keep verification prices confined to the disposable database.

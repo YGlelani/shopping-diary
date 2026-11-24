@@ -35,6 +35,24 @@ public class ShoppingList {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    @Version
+    private long revision;
+
+    @Column(length = 1000)
+    private String description;
+
+    @Column(name = "location_label", length = 150)
+    private String locationLabel;
+
+    @Column(name = "location_lat")
+    private Double locationLat;
+
+    @Column(name = "location_lon")
+    private Double locationLon;
+
+    @Column(name = "creation_request_id", updatable = false)
+    private java.util.UUID creationRequestId;
+
     @PrePersist
     void onCreate() {
         createdAt = Instant.now();

@@ -6,6 +6,12 @@ import java.util.List;
 
 public class ListDetailResponse {
 
+    @lombok.Getter @lombok.Setter private String description;
+    @lombok.Getter @lombok.Setter private Instant updatedAt;
+    @lombok.Getter @lombok.Setter private long revision;
+    @lombok.Getter @lombok.Setter private String locationLabel;
+    @lombok.Getter @lombok.Setter private Double locationLat;
+    @lombok.Getter @lombok.Setter private Double locationLon;
     private Long id;
     private String name;
     private BigDecimal budgetAmount;
@@ -32,6 +38,17 @@ public class ListDetailResponse {
     public void setItems(List<Item> items) { this.items = items; }
 
     public static class Item {
+        @lombok.Getter @lombok.Setter private String customName;
+        @lombok.Getter @lombok.Setter private String preferredBrand;
+        @lombok.Getter @lombok.Setter private String category;
+        @lombok.Getter @lombok.Setter private String barcode;
+        @lombok.Getter @lombok.Setter private String imageUrl;
+        @lombok.Getter @lombok.Setter private String notes;
+        @lombok.Getter @lombok.Setter private boolean flexibleBrand;
+        @lombok.Getter @lombok.Setter private boolean purchased;
+        @lombok.Getter @lombok.Setter private Long substituteProductId;
+        @lombok.Getter @lombok.Setter private BigDecimal combinedMeasure;
+        @lombok.Getter @lombok.Setter private String measureUnit;
         private Long id;
         private Long productId;
         private String productName;

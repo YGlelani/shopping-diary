@@ -41,6 +41,15 @@ public class ShoppingListItem {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    @Column(length = 1000)
+    private String notes;
+
+    @Column(nullable = false)
+    private boolean purchased;
+
+    @Column(name = "substitute_product_id")
+    private Long substituteProductId;
+
     @PrePersist
     void onCreate() {
         createdAt = Instant.now();

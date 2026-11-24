@@ -22,6 +22,7 @@ import za.co.shoppingdiary.user.entity.Role;
 import za.co.shoppingdiary.user.entity.User;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -409,6 +410,144 @@ class CatalogueDiscoveryIntegrationTest {
         mvc.perform(get(requestPath).header("Authorization", token).param("lat", "-28.73").param("lon", "29.35").param("r", "2"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$[0].name").value("Fixture Branch"))
                 .andExpect(jsonPath("$[0].sourceUrl").value("https://example.test/branch"));
+    }
+
+    @Test
+    void persistsCustomItemsIdempotentAddsAndReusableOwnedLists() throws Exception {
+        String buyer = register("list-owner@example.test");
+        String outsider = register("other-list-owner@example.test");
+        String id = newList(buyer, "Weekly groceries");
+        String listKey = java.util.UUID.randomUUID().toString();
+        String household = "{\"name\":\"Household\"}";
+        String other = json.readTree(mvc.perform(post("/api/v1/lists").header("Authorization", buyer)
+                .header("Idempotency-Key", listKey).contentType("application/json").content(household))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString()).path("id").asText();
+        mvc.perform(post("/api/v1/lists").header("Authorization", buyer).header("Idempotency-Key", listKey)
+                .contentType("application/json").content(household)).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(Long.valueOf(other)));
+        org.junit.jupiter.api.Assertions.assertNotEquals(id, other);
+        String base = "/api/v1/lists/" + id;
+        mvc.perform(get("/api/v1/lists").header("Authorization", buyer))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(2));
+
+        String requestKey = java.util.UUID.randomUUID().toString();
+        String linked = "{\"productId\":" + breadId + ",\"quantity\":1}";
+        for (int attempt = 0; attempt < 2; attempt++) {
+            mvc.perform(post(base + "/items").header("Authorization", buyer).header("Idempotency-Key", requestKey)
+                    .contentType("application/json").content(linked))
+                    .andExpect(status().isCreated()).andExpect(jsonPath("$.quantity").value(1));
+        }
+        mvc.perform(post(base + "/items").header("Authorization", buyer).contentType("application/json").content(linked))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.quantity").value(2));
+        String custom = """
+            {"customName":"Loose apples","quantity":1.25,"unit":"kg","notes":"For lunches","preferredBrand":"Local farm"}
+            """;
+        mvc.perform(post(base + "/items").header("Authorization", buyer).contentType("application/json").content(custom))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.customName").value("Loose apples"));
+        var current = detail(base, buyer);
+        long revision = current.path("revision").asLong();
+        long breadItem = current.path("items").get(0).path("id").asLong();
+        long customItem = current.path("items").get(1).path("id").asLong();
+        String itemPath = base + "/items/" + breadItem;
+        String edit = """
+            {"productId":%d,"quantity":3,"unit":"pack","purchased":true,"notes":"Whole wheat","preferredBrand":"Sasko"}
+            """.formatted(breadId);
+        mvc.perform(put(itemPath).param("revision", String.valueOf(revision)).header("Authorization", buyer)
+                .contentType("application/json").content(edit)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].purchased").value(true))
+                .andExpect(jsonPath("$.items[0].combinedMeasure").value(2.1));
+        mvc.perform(put(itemPath).param("revision", String.valueOf(revision)).header("Authorization", buyer)
+                .contentType("application/json").content(linked)).andExpect(status().isConflict());
+
+        String copyKey = java.util.UUID.randomUUID().toString();
+        mvc.perform(post(base + "/duplicate").header("Authorization", buyer).header("Idempotency-Key", copyKey)
+                .contentType("application/json")
+                .content("{\"name\":\"Next week\"}")).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.items[0].purchased").value(false))
+                .andExpect(jsonPath("$.items[0].quantity").value(3))
+                .andExpect(jsonPath("$.items[0].preferredBrand").value("Sasko"))
+                .andExpect(jsonPath("$.items[1].notes").value("For lunches"));
+        mvc.perform(post(base + "/duplicate").header("Authorization", buyer).header("Idempotency-Key", copyKey)
+                .contentType("application/json").content("{\"name\":\"Next week\"}"))
+                .andExpect(status().isCreated());
+        mvc.perform(get("/api/v1/lists").header("Authorization", buyer)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(3));
+        mvc.perform(get(base).header("Authorization", outsider)).andExpect(status().isNotFound());
+        mvc.perform(put(base + "/items/" + customItem).param("revision", "0").header("Authorization", outsider)
+                .contentType("application/json").content(custom)).andExpect(status().isNotFound());
+        mvc.perform(delete(base).header("Authorization", outsider)).andExpect(status().isNotFound());
+
+        changeList(base, buyer, "ARCHIVED");
+        mvc.perform(post(base + "/items").header("Authorization", buyer).contentType("application/json").content(linked))
+                .andExpect(status().isConflict());
+        changeList(base, buyer, "ACTIVE");
+        mvc.perform(delete(base + "/items/purchased").param("revision", detail(base, buyer).path("revision").asText())
+                .header("Authorization", buyer)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].customName").value("Loose apples"));
+    }
+
+    @Test
+    void quotesAndPlansOnlyEligibleExactOrApprovedProductsAtTheSelectedLocation() throws Exception {
+        String buyer = register("list-estimator@example.test");
+        String base = "/api/v1/lists/" + newList(buyer, "Estimate");
+        long alternate = jdbc.queryForObject("""
+            INSERT INTO products (canonical_name, brand, size_text, category_id)
+            SELECT 'Approved Wheat Bread', 'Another brand', '700 g', category_id FROM products WHERE id = ?
+            RETURNING id
+            """, Long.class, breadId);
+        observe("CURRENT_TIMESTAMP - interval '1 hour'", 30, null, "IN_STOCK", "VERIFIED", "primary-list-price");
+        jdbc.update("""
+            INSERT INTO price_observations (product_id, store_id, shelf_price, source_type, stock_status,
+                verification_status, content_hash)
+            VALUES (?, ?, 20, 'MANUAL', 'IN_STOCK', 'VERIFIED', 'alternate-list-price')
+            """, alternate, storeId);
+        mvc.perform(post(base + "/items").header("Authorization", buyer).contentType("application/json")
+                .content("{\"productId\":" + breadId + ",\"quantity\":2}")).andExpect(status().isCreated());
+        mvc.perform(post(base + "/items").header("Authorization", buyer).contentType("application/json")
+                .content("{\"customName\":\"Loose produce\",\"quantity\":1.25,\"unit\":\"kg\"}")).andExpect(status().isCreated());
+
+        mvc.perform(get(base + "/estimate").param("lat", "-26").param("lon", "28").header("Authorization", buyer))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].total").value(60));
+        mvc.perform(get("/api/v1/lists/coverage").param("lat", "-26").param("lon", "28").header("Authorization", buyer))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].pricedItems").value(1))
+                .andExpect(jsonPath("$[0].hasLocation").value(true));
+        mvc.perform(get(base + "/estimate").param("lat", "-33").param("lon", "18").header("Authorization", buyer))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        var state = detail(base, buyer);
+        long item = state.path("items").get(0).path("id").asLong();
+        mvc.perform(put(base + "/items/" + item).param("revision", state.path("revision").asText())
+                .header("Authorization", buyer).contentType("application/json")
+                .content("{\"productId\":" + breadId + ",\"quantity\":2,\"flexibleBrand\":true,\"substituteProductId\":" + alternate + "}"))
+                .andExpect(status().isOk());
+        mvc.perform(get(base + "/estimate").param("lat", "-26").param("lon", "28").header("Authorization", buyer))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].productId").value(alternate))
+                .andExpect(jsonPath("$[0].total").value(40));
+        mvc.perform(post(base + "/optimize").header("Authorization", buyer).contentType("application/json")
+                .content("{\"lat\":-26,\"lon\":28,\"costPerKm\":0}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.skippedItems").value(1))
+                .andExpect(jsonPath("$.recommendation.grandTotal").value(40))
+                .andExpect(jsonPath("$.recommendation.items[0].substitutedFor").value("Whole Wheat Bread"));
+    }
+
+    private String newList(String token, String name) throws Exception {
+        String body = json.writeValueAsString(java.util.Map.of("name", name, "description", "Planning", "budgetAmount", 100));
+        return json.readTree(mvc.perform(post("/api/v1/lists").header("Authorization", token)
+                .contentType("application/json").content(body)).andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString()).path("id").asText();
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode detail(String path, String token) throws Exception {
+        return json.readTree(mvc.perform(get(path).header("Authorization", token)).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+    }
+
+    private void changeList(String base, String token, String status) throws Exception {
+        mvc.perform(put(base).param("revision", detail(base, token).path("revision").asText())
+                .param("status", status).header("Authorization", token).contentType("application/json")
+                .content("{\"name\":\"Updated weekly\",\"description\":\"New description\",\"budgetAmount\":120}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value(status));
     }
 
     private long addBranch(String name, String slug, double lon) {

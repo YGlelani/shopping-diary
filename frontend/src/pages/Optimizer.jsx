@@ -114,7 +114,7 @@ export default function Optimizer({ token, listId, location, budgetAmount, radiu
                 <ul className="space-y-2">
                   {storeItems.map((item, idx) => (
                     <li key={idx} className="flex justify-between text-sm">
-                      <span className="text-gray-700">{item.quantity}x {item.productName}</span>
+                      <span className="text-gray-700">{item.quantity}x {item.productName}{item.substitutedFor && <small className="block">Approved substitute for {item.substitutedFor}</small>}</span>
                       <span className="text-gray-500">R{item.lineTotal.toFixed(2)}</span>
                     </li>
                   ))}

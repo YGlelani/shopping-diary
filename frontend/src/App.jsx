@@ -1,7 +1,9 @@
+import AddToListDialog from './components/AddToListDialog';
 
 import {
   useState,
   useEffect,
+  useRef,
   useCallback,
   lazy,
   Suspense,
@@ -69,14 +71,17 @@ function SignedInApp({
     try { localStorage.removeItem('shoppingDiary.location'); } catch { /* storage unavailable */ }
   }, []);
 
-  const [saving, setSaving] = useState(false);
+  const [destination, setDestination] = useState(null);
+  const createRequest = useRef(null);
   const [radius, setRadius] = useState(15);
 
   const activeList = lists.find(
     list => list.id === listId
   );
 
-  const cart = activeList?.items ?? [];
+  const planLocation = activeList?.locationLat != null
+    ? { lat: activeList.locationLat, lon: activeList.locationLon, label: activeList.locationLabel }
+    : location;
 
   const changeLocation = useCallback(
     (lat, lon, label) => {
@@ -181,94 +186,46 @@ function SignedInApp({
     };
   }, [token]);
 
-  async function createList(
-    name,
-    budgetAmount
-  ) {
-    const created = await apiRequest(
-      '/lists',
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          name,
-          budgetAmount,
-        }),
-      },
-      token
-    );
-
-    setLists(current => [
-      created,
-      ...current,
-    ]);
-
-    selectList(created.id);
+  function rememberList(updated) {
+    setLists(current => {
+      const present = current.find(list => list.id === updated.id);
+      if (!present) return [updated, ...current];
+      if ((present.revision ?? 0) > (updated.revision ?? 0)) return current;
+      return current.map(list => list.id === updated.id ? updated : list);
+    });
   }
 
-  async function updateItems(
-    endpoint,
-    options
-  ) {
-    if (!listId || saving) return false;
+  async function createList(values) {
+    const body = JSON.stringify(values);
+    if (createRequest.current?.body !== body) createRequest.current = { body, key: crypto.randomUUID() };
+    const created = await apiRequest('/lists', {
+      method: 'POST', body, headers: { 'Idempotency-Key': createRequest.current.key },
+    }, token);
+    createRequest.current = null;
+    rememberList(created);
+    selectList(created.id);
+    return created;
+  }
 
-    setSaving(true);
+  async function refreshList(id) {
+    const updated = await apiRequest('/lists/' + id, {}, token);
+    rememberList(updated);
+    return updated;
+  }
 
-    try {
-      await apiRequest(
-        endpoint,
-        options,
-        token
-      );
-
-      const updated = await apiRequest(
-        `/lists/${listId}`,
-        {},
-        token
-      );
-
-      setLists(current =>
-        current.map(list =>
-          list.id === updated.id
-            ? updated
-            : list
-        )
-      );
-      return true;
-    } catch (error) {
-      alert(error.message);
-      return false;
-    } finally {
-      setSaving(false);
-    }
+  function forgetList(id) {
+    setLists(current => current.filter(list => list.id !== id));
+    if (listId === id) selectList(null);
   }
 
   function addToCart(productId) {
-    if (!listId) {
-      alert(
-        'Create a shopping list before adding products.'
-      );
-      return false;
-    }
+    if (destination) return Promise.resolve(false);
+    return new Promise(resolve => setDestination({ productId, resolve }));
+  }
 
-    const existingItem = cart.find(
-      entry => entry.productId === productId
-    );
-
-    return existingItem
-      ? updateItems(
-          `/lists/${listId}/items/${existingItem.id}/increment`,
-          { method: 'POST' }
-        )
-      : updateItems(
-          `/lists/${listId}/items`,
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              productId,
-              quantity: 1,
-            }),
-          }
-        );
+  function finishDestination(saved) {
+    destination?.resolve(saved);
+    setDestination(null);
   }
 
   if (!user) {
@@ -306,6 +263,9 @@ function SignedInApp({
           </p>
         )}
 
+        {destination && <AddToListDialog productId={destination.productId} lists={lists} listId={listId}
+          token={token} onCreate={createList} onSaved={refreshList} onClose={finishDestination} />}
+
         <Suspense
           fallback={
             <p>Loading page...</p>
@@ -336,32 +296,22 @@ function SignedInApp({
             <Route
               path="/lists"
               element={
-                <ShoppingLists
-                  cart={cart}
-                  lists={lists}
-                  listId={listId}
-                  onSelect={selectList}
-                  onCreate={createList}
-                  onRemoveItem={id =>
-                    updateItems(
-                      `/lists/${listId}/items/${id}`,
-                      { method: 'DELETE' }
-                    )
-                  }
-                />
+                <ShoppingLists lists={lists} listId={listId} onSelect={selectList} onCreate={createList}
+                  token={token} location={location} radius={radius} onRemember={rememberList}
+                  onRefresh={refreshList} onForget={forgetList} onAddItem={addToCart} />
               }
             />
 
             <Route
               path="/optimize"
               element={
-                location ? (
+                planLocation ? (
                   <Optimizer
                     radius={radius}
-                    key={listId}
+                    key={[listId, activeList?.revision, planLocation.lat, planLocation.lon, radius].join(':')}
                     token={token}
                     listId={listId}
-                    location={location}
+                    location={planLocation}
                     budgetAmount={
                       activeList?.budgetAmount
                     }

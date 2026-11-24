@@ -49,7 +49,7 @@ export default function Dashboard({ token, budgetAmount, lists, onSelectList }) 
             <div className="p-3 bg-blue-50 text-blue-700 rounded-lg"><ListChecks size={24} /></div>
             <div>
               <p className="text-sm font-medium text-gray-500">Active Lists</p>
-              <p className="text-2xl font-bold text-gray-900">{lists.length}</p>
+              <p className="text-2xl font-bold text-gray-900">{lists.filter(list => ['ACTIVE', 'DRAFT'].includes(list.status)).length}</p>
             </div>
           </CardContent>
         </Card>
@@ -88,8 +88,8 @@ export default function Dashboard({ token, budgetAmount, lists, onSelectList }) 
                       <p className="font-medium text-gray-900">{list.name}</p>
                       <p className="text-xs text-gray-500">{list.items?.length || 0} items</p>
                     </div>
-                    <Link to="/optimize" onClick={() => onSelectList(list.id)} className="text-sm font-medium text-gray-600 hover:text-gray-900">
-                      Optimize
+                    <Link to="/lists" onClick={() => onSelectList(list.id)} className="text-sm font-medium text-gray-600 hover:text-gray-900">
+                      Open list
                     </Link>
                   </li>
                 ))}

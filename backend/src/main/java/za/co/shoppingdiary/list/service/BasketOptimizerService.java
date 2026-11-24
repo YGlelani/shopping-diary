@@ -6,6 +6,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.transaction.annotation.Transactional;
 import za.co.shoppingdiary.list.dto.*;
 import za.co.shoppingdiary.list.entity.ShoppingListItem;
@@ -47,7 +49,7 @@ public class BasketOptimizerService {
 
         lists.findByIdAndUserId(listId, userId)
                 .orElseThrow(() ->
-                        new IllegalArgumentException("List not found"));
+                        new ResponseStatusException(HttpStatus.NOT_FOUND, "List not found"));
 
         if (req.getLat() == null || req.getLon() == null) {
             throw new IllegalArgumentException(
@@ -93,7 +95,7 @@ public class BasketOptimizerService {
         }
 
         List<ShoppingListItem> allItems =
-                items.findByListIdOrderByIdAsc(listId);
+                items.findByListIdOrderByIdAsc(listId).stream().filter(item -> !item.isPurchased()).toList();
 
         List<ShoppingListItem> pricedItems = allItems.stream()
                 .filter(item -> item.getProductId() != null)
@@ -148,20 +150,14 @@ public class BasketOptimizerService {
                 li.product_id,
                 li.quantity,
                 p.canonical_name AS product_name,
-                ep.effective_price AS shelf_price,
-                ep.promo_price AS regular_promo,
-                ap.promo_price AS promotion_price,
-                ap.min_quantity
+                offer.product_id AS offer_product_id,
+                offer.product_name AS offer_product_name,
+                offer.total
             FROM nearby_stores ns
             CROSS JOIN shopping_list_items li
-            LEFT JOIN LATERAL current_branch_price(li.product_id, ns.id, :maxAgeDays) ep ON TRUE
-            LEFT JOIN current_branch_promotions ap
-                ON ap.store_id = ns.id AND ap.product_id = li.product_id
-               AND ap.promo_type = 'MULTIBUY' AND ep.effective_price IS NOT NULL
-            LEFT JOIN products p
-                ON p.id = li.product_id
-            WHERE li.list_id = :listId
-              AND li.product_id IS NOT NULL
+            LEFT JOIN LATERAL shopping_list_item_offer(li, ns.id, :maxAgeDays) offer ON TRUE
+            JOIN products p ON p.id = li.product_id
+            WHERE li.list_id = :listId AND NOT li.purchased
             """;
 
         MapSqlParameterSource params =
@@ -198,7 +194,7 @@ public class BasketOptimizerService {
                                         throw new IllegalStateException(
                                                 "Unable to read store", ex);
                                     }
-                                    s.pricesByProduct = new HashMap<>();
+                                    s.offersByItem = new HashMap<>();
                                     return s;
                                 });
 
@@ -231,39 +227,11 @@ public class BasketOptimizerService {
                             "Invalid quantity for item " + item.itemId);
                 }
 
-                BigDecimal shelf =
-                        rs.getBigDecimal("shelf_price");
-                BigDecimal regularPromo =
-                        rs.getBigDecimal("regular_promo");
-
-                if (!isPositive(shelf)
-                        && !isPositive(regularPromo)) {
-                    continue;
+                BigDecimal total = rs.getBigDecimal("total");
+                if (total != null) {
+                    store.offersByItem.put(itemId, new ItemOffer(rs.getLong("offer_product_id"),
+                            rs.getString("offer_product_name"), total));
                 }
-
-                BigDecimal promotion =
-                        rs.getBigDecimal("promotion_price");
-
-                Integer minQuantity = null;
-                Object minQuantityValue =
-                        rs.getObject("min_quantity");
-
-                if (minQuantityValue != null) {
-                    minQuantity = rs.getInt("min_quantity");
-                }
-
-                PriceData price = new PriceData(
-                        shelf,
-                        regularPromo,
-                        promotion,
-                        minQuantity
-                );
-
-                store.pricesByProduct
-                        .computeIfAbsent(
-                                item.productId,
-                                ignored -> new ArrayList<>())
-                        .add(price);
             }
             return null;
         });
@@ -271,7 +239,7 @@ public class BasketOptimizerService {
         List<StoreCandidate> candidates =
                 storesById.values().stream()
                         .filter(store ->
-                                !store.pricesByProduct.isEmpty())
+                                !store.offersByItem.isEmpty())
                         .sorted(Comparator.comparingLong(
                                 store -> store.id))
                         .toList();
@@ -429,36 +397,18 @@ public class BasketOptimizerService {
             BigDecimal costPerKm
     ) {
         Map<Long, Long> itemToStore = new HashMap<>();
-        Map<Long, BigDecimal> itemToTotal = new HashMap<>();
+        Map<Long, ItemOffer> chosenOffers = new HashMap<>();
 
         BigDecimal productCost = BigDecimal.ZERO;
         int missing = 0;
 
         for (ItemCandidate item : allItems) {
             Long bestStore = null;
-            BigDecimal bestTotalCost = null;
-
+            ItemOffer best = null;
             for (StoreCandidate store : subset) {
-                List<PriceData> prices =
-                        store.pricesByProduct.get(item.productId);
-
-                if (prices == null || prices.isEmpty()) {
-                    continue;
-                }
-
-                BigDecimal totalCost = prices.stream()
-                        .map(price ->
-                                lineCost(price, item.quantity))
-                        .min(BigDecimal::compareTo)
-                        .orElse(null);
-
-                if (totalCost == null) {
-                    continue;
-                }
-
-                if (bestTotalCost == null
-                        || totalCost.compareTo(bestTotalCost) < 0) {
-                    bestTotalCost = totalCost;
+                ItemOffer offer = store.offersByItem.get(item.itemId);
+                if (offer != null && (best == null || offer.total().compareTo(best.total()) < 0)) {
+                    best = offer;
                     bestStore = store.id;
                 }
             }
@@ -469,8 +419,8 @@ public class BasketOptimizerService {
             }
 
             itemToStore.put(item.itemId, bestStore);
-            itemToTotal.put(item.itemId, bestTotalCost);
-            productCost = productCost.add(bestTotalCost);
+            chosenOffers.put(item.itemId, best);
+            productCost = productCost.add(best.total());
         }
 
         Map<Long, BigDecimal> subtotals = new HashMap<>();
@@ -480,7 +430,7 @@ public class BasketOptimizerService {
             if (storeId != null) {
                 subtotals.merge(
                         storeId,
-                        itemToTotal.get(item.itemId),
+                        chosenOffers.get(item.itemId).total(),
                         BigDecimal::add);
             }
         }
@@ -530,20 +480,23 @@ public class BasketOptimizerService {
                 continue;
             }
 
-            BigDecimal total = itemToTotal.get(item.itemId);
+            ItemOffer chosen = chosenOffers.get(item.itemId);
+            BigDecimal total = chosen.total();
 
             BigDecimal unitPrice = total.divide(
                     item.quantity, 2, RoundingMode.HALF_UP);
 
-            planItems.add(new PlanItem(
-                    item.productId,
-                    item.productName,
+            var planItem = new PlanItem(
+                    chosen.productId(),
+                    chosen.name(),
                     item.quantity,
                     storeId,
                     storeNames.get(storeId),
                     unitPrice,
                     total
-            ));
+            );
+            if (chosen.productId() != item.productId) planItem.setSubstitutedFor(item.productName);
+            planItems.add(planItem);
         }
 
         BigDecimal grandTotal =
@@ -566,12 +519,14 @@ public class BasketOptimizerService {
             Integer minQuantity
     ) {}
 
+    private record ItemOffer(long productId, String name, BigDecimal total) {}
+
     static class StoreCandidate {
         Long id;
         String name;
         String retailerName;
         double distanceKm;
-        Map<Long, List<PriceData>> pricesByProduct;
+        Map<Long, ItemOffer> offersByItem;
     }
 
     static class ItemCandidate {

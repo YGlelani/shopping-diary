@@ -3,6 +3,7 @@ package za.co.shoppingdiary.list.dto;
 import java.math.BigDecimal;
 
 public class PlanItem {
+    @lombok.Getter @lombok.Setter private String substitutedFor;
 
     private Long productId;
     private String productName;
