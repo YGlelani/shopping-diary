@@ -20,11 +20,13 @@ public class ShoppingEstimateService {
 
     @Value("${shopping-diary.prices.max-age-days:7}")
     private int maxAgeDays;
+    @Value("${LOYALTYHUB_FREE_TIER_ENABLED:false}") private boolean loyaltyEnabled;
 
     public record Line(long listId, long itemId, String requestedName, Long productId, String productName,
                        Long storeId, String storeName, BigDecimal quantity, BigDecimal total,
                        OffsetDateTime observedAt, String sourceType, String verificationStatus,
-                       LocalDate promotionEndsOn, String unavailableReason) {}
+                       LocalDate promotionEndsOn, String unavailableReason, String imageUrl,
+                       BigDecimal catalogueTotal, String catalogueRetailer, OffsetDateTime catalogueObservedAt) {}
 
     public List<Line> estimate(long owner, List<Long> listIds, Double lat, Double lon, double radius,
                                Long branchId, boolean usePreferredLocation) {
@@ -46,7 +48,7 @@ public class ShoppingEstimateService {
         var parameters = new MapSqlParameterSource("owner", owner).addValue("lists", listIds)
                 .addValue("lat", lat, Types.DOUBLE).addValue("lon", lon, Types.DOUBLE)
                 .addValue("branch", branchId, Types.BIGINT).addValue("preferred", usePreferredLocation)
-                .addValue("radius", radius * 1000).addValue("age", maxAgeDays)
+                .addValue("radius", radius * 1000).addValue("age", maxAgeDays).addValue("catalogue",loyaltyEnabled)
                 .addValue("loyalty",loyaltyRetailers.isEmpty() ? Set.of(-1L) : loyaltyRetailers);
 
         return jdbc.sql("""
@@ -75,7 +77,9 @@ public class ShoppingEstimateService {
             SELECT li.list_id, li.id AS item_id, coalesce(p.canonical_name,li.free_text) AS requested_name,
                    li.quantity, best.product_id, best.product_name, best.store_id, best.store_name, best.total,
                    observed.observed_at, observed.source_type, observed.verification_status,
-                   best.promotion_ends_on,
+                   best.promotion_ends_on,coalesce(matched.image_url,p.image_url) AS image_url,
+                   catalogue.total AS catalogue_total,catalogue.retailer AS catalogue_retailer,
+                   catalogue.observed_at AS catalogue_observed_at,
                    CASE WHEN best.total IS NOT NULL THEN NULL
                         WHEN li.product_id IS NULL THEN 'UNLINKED'
                         WHEN history.has_stale THEN 'STALE_OBSERVATION'
@@ -83,6 +87,18 @@ public class ShoppingEstimateService {
             FROM owned l JOIN shopping_list_items li ON li.list_id = l.id
             LEFT JOIN products p ON p.id = li.product_id
             LEFT JOIN best ON best.item_id = li.id
+            LEFT JOIN products matched ON matched.id=best.product_id
+            LEFT JOIN LATERAL (
+                SELECT round(offer.amount*li.quantity,2) AS total,r.name AS retailer,offer.observed_at
+                FROM loyalty_latest_prices offer JOIN retailers r ON r.id=offer.retailer_id
+                WHERE :catalogue AND offer.product_id=li.product_id AND r.active
+                    AND offer.scope IN ('ONLINE','CATALOGUE') AND offer.in_stock IS DISTINCT FROM false
+                    AND offer.observed_at>=now()-interval '24 hours'
+                    AND (offer.promotion_expires_at IS NULL OR offer.promotion_expires_at>now())
+                    AND (li.unit IS NULL OR li.unit IN ('item','pack','bottle','carton','bag'))
+                    AND (li.flexible_brand OR li.preferred_brand IS NULL OR lower(p.brand)=lower(li.preferred_brand))
+                ORDER BY offer.amount,offer.observed_at DESC,offer.retailer_id LIMIT 1
+            ) catalogue ON true
             LEFT JOIN LATERAL eligible_branch_observation(best.product_id,best.store_id,:age) observed ON best.product_id IS NOT NULL
             LEFT JOIN LATERAL (
                 SELECT bool_or(latest.observed_at < CURRENT_TIMESTAMP - make_interval(days =>

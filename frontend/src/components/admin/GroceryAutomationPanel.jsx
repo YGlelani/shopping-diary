@@ -11,7 +11,8 @@ const time = date => date ? new Date(date).toLocaleString('en-ZA') : 'No complet
 export default function GroceryAutomationPanel({ token }) {
   const [version, setVersion] = useState(0);
   const [status, setStatus] = useState(null);
-  const [source, setSource] = useState('OPEN_FOOD_FACTS');
+  const [source, setSource] = useState('LOYALTYHUB');
+  const [editing, setEditing] = useState(null);
   const [query, setQuery] = useState('milk');
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -49,6 +50,23 @@ export default function GroceryAutomationPanel({ token }) {
     }
   }
 
+  async function discoveryAction(path, method, payload) {
+    setBusy(true);
+    setError('');
+    setReport(null);
+    try {
+      const data = await apiRequest(root + '/loyaltyhub' + path, {
+        method, body: payload ? JSON.stringify(payload) : undefined,
+      }, token);
+      if (data) setReport(data);
+    } catch (failure) {
+      setError(failure.message);
+    } finally {
+      setBusy(false);
+      setVersion(value => value + 1);
+    }
+  }
+
   const enabled = status?.sources.find(item => item.source === source)?.enabled;
   const available = isBulk(source) ? Boolean(file || enabled) : enabled && (source !== 'LOYALTYHUB' || query.trim());
   return <section className="space-y-4 rounded-xl border border-gray-200 bg-white p-4 sm:p-6">
@@ -69,7 +87,7 @@ export default function GroceryAutomationPanel({ token }) {
         onChange={event => setFile(event.target.files?.[0] || null)} /></label>}
       {source === 'LOYALTYHUB' && <label className="text-sm">Search query<Input value={query} maxLength={120} onChange={event => setQuery(event.target.value)} /></label>}
     </div>
-    {source === 'LOYALTYHUB' && <p className="text-sm text-gray-600">Previews also use the free quota. {status?.quota.localCalls ?? 0} local calls in the last 31 days.
+    {source === 'LOYALTYHUB' && <p className="text-sm text-gray-600">Previews also use the free quota. {status?.quota.localCalls ?? 0} local calls this month.
       {status?.quota.remaining != null && ' Provider calls remaining ' + status.quota.remaining + '.'}
       {status?.quota.rowsRemaining != null && ' Provider rows remaining ' + status.quota.rowsRemaining + '.'}</p>}
     <div className="flex flex-wrap gap-2">
@@ -83,6 +101,56 @@ export default function GroceryAutomationPanel({ token }) {
       {report.checkpoint && <p className="break-all">Checkpoint · {report.checkpoint}</p>}
       {report.detail && <p className="break-words">{report.detail}</p>}
     </div>}
+    <details className="rounded-lg border border-gray-200 p-3">
+      <summary className="cursor-pointer font-medium">Loyalty Hub discovery</summary>
+      {status?.coverage && <div className="mt-3 space-y-3 text-sm">
+        <p>{status.discovery.length} generic types · {status.coverage.products} commercial products · {status.coverage.pictured} with images · {status.coverage.products - status.coverage.pictured} missing images · {status.coverage.missingBarcodes} missing barcodes</p>
+        <p>{status.coverage.latestPrices} latest offers · {status.coverage.stalePrices} older than 24 hours · {status.quota.localRows} rows counted locally this month</p>
+        <p>{status.discovery.filter(item => item.failures).length} jobs awaiting retry</p>
+        <details>
+          <summary className="cursor-pointer">Retailer and category coverage</summary>
+          <ul className="list-disc pl-5">{status.coverageGroups?.map(group => <li key={group.type + group.label}>
+            {group.type} · {group.label} · {group.products} products
+          </li>)}</ul>
+        </details>
+        <details>
+          <summary className="cursor-pointer">Incomplete products</summary>
+          <ul className="list-disc pl-5">{status.incomplete?.map(item => <li key={item.id}>
+            {item.name} · {[item.missingImage && 'Missing image', item.missingBarcode && 'Missing barcode'].filter(Boolean).join(', ')}
+          </li>)}</ul>
+        </details>
+        <div className="flex flex-wrap gap-2">
+          <Button disabled={busy} onClick={() => discoveryAction('/pause?paused=' + !status.paused, 'PUT')}>{status.paused ? 'Resume discovery' : 'Pause discovery'}</Button>
+          <Button disabled={busy || status.paused || !status.sources.find(item => item.source === 'LOYALTYHUB')?.enabled}
+            onClick={() => discoveryAction('/discovery', 'POST')}>Run next discovery page</Button>
+        </div>
+        <label className="block">Generic grocery type
+          <select className="block w-full rounded-lg border border-gray-300 p-2" value={editing?.name ?? ''} onChange={event =>
+            setEditing(status.discovery.find(item => item.name === event.target.value) ?? null)}>
+            <option value="">Choose a grocery type</option>
+            {status.discovery.map(item => <option key={item.id} value={item.name}>{item.name} ({item.variants}/{item.target})</option>)}
+          </select>
+        </label>
+        {editing && <form className="grid gap-2 sm:grid-cols-2" onSubmit={event => {
+          event.preventDefault();
+          const { name, category, keywords, priority, target, departmentFilter, retailerFilter, regionFilter } = editing;
+          discoveryAction('/discovery', 'PUT', [{ name, category, keywords, priority, target,
+            departmentFilter: departmentFilter || null, retailerFilter: retailerFilter || null, regionFilter: regionFilter || null }]);
+        }}>
+          <label>Search terms (separate with |)<Input required maxLength={120} value={editing.keywords}
+            onChange={event => setEditing({ ...editing, keywords: event.target.value })} /></label>
+          <label>Priority<Input type="number" required min={1} max={3} value={editing.priority}
+            onChange={event => setEditing({ ...editing, priority: Number(event.target.value) })} /></label>
+          <label>Target commercial variants<Input type="number" required min={1} max={100} value={editing.target}
+            onChange={event => setEditing({ ...editing, target: Number(event.target.value) })} /></label>
+          {Object.entries({ departmentFilter: 'Provider department', retailerFilter: 'Provider retailer', regionFilter: 'Provider region' })
+            .map(([field, label]) => <label key={field}>{label} (optional)<Input maxLength={70} pattern="[a-z0-9_\-]+"
+              value={editing[field] || ''} onChange={event => setEditing({ ...editing, [field]: event.target.value })} /></label>)}
+          <p>Next eligible run {time(editing.nextRun)}</p>
+          <Button type="submit" disabled={busy}>Save discovery settings</Button>
+        </form>}
+      </div>}
+    </details>
     <details><summary className="cursor-pointer font-medium">Recent import runs</summary>
       <ul className="mt-2 divide-y divide-gray-200 text-sm">{status?.runs.map(run => <li key={run.id} className="space-y-1 py-2">
         <p>{names[run.source] || run.source} · {run.status} · {time(run.finishedAt)}{run.dryRun && ' · Preview'}</p>

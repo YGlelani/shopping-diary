@@ -13,6 +13,9 @@ public class ProductSearchHit {
     private String barcode;
     private String sizeText;
     private BigDecimal minEffectivePrice;
+    @Getter @Setter private BigDecimal catalogueAmount;
+    @Getter @Setter private String catalogueRetailer;
+    @Getter @Setter private java.time.OffsetDateTime catalogueObservedAt;
     private int storeCount;
     private Instant latestObservedAt;
     private String imageUrl;

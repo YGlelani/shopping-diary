@@ -27,6 +27,7 @@ import java.util.regex.Pattern;
 @Service
 @RequiredArgsConstructor
 public class ProductSearchService {
+    @Value("${LOYALTYHUB_FREE_TIER_ENABLED:false}") private boolean loyaltyEnabled;
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -157,7 +158,9 @@ public class ProductSearchService {
                 ORDER BY relevance.score DESC NULLS LAST, name_rank, p.id
                 LIMIT CASE WHEN CAST(:priced AS boolean) IS NULL THEN :window END
             )
-            SELECT p.*, prices.store_count, prices.min_price, prices.latest_observed_at
+            SELECT p.*, prices.store_count, prices.min_price, prices.latest_observed_at,
+                catalogue_price.amount AS catalogue_amount,catalogue_price.retailer AS catalogue_retailer,
+                catalogue_price.observed_at AS catalogue_observed_at
             FROM matches p
             CROSS JOIN LATERAL (
                 SELECT count(*) AS store_count, min(effective_price) AS min_price,
@@ -165,6 +168,13 @@ public class ProductSearchService {
                 FROM nearby_stores s
                 %s
             ) prices
+            LEFT JOIN LATERAL (
+                SELECT l.amount,r.name AS retailer,l.observed_at
+                FROM loyalty_latest_prices l JOIN retailers r ON r.id=l.retailer_id
+                WHERE :loyalty AND l.product_id=p.id AND l.scope IN ('ONLINE','CATALOGUE') AND r.active
+                    AND l.in_stock IS DISTINCT FROM false AND l.observed_at>=now()-interval '24 hours'
+                ORDER BY l.amount,l.observed_at DESC,l.retailer_id LIMIT 1
+            ) catalogue_price ON true
             WHERE CAST(:priced AS boolean) IS NULL OR :priced = (prices.store_count > 0)
             ORDER BY p.score DESC NULLS LAST, p.name_rank, p.id
             LIMIT :limit OFFSET :offset
@@ -173,6 +183,7 @@ public class ProductSearchService {
         var params = new MapSqlParameterSource()
                 .addValue("text", terms.text())
                 .addValue("anchor", anchor)
+                .addValue("loyalty",loyaltyEnabled)
                 .addValue("anchorPattern", "%" + anchor + "%")
                 .addValue("barcode", terms.barcode(), Types.VARCHAR)
                 .addValue("querySize", terms.size(), Types.VARCHAR)
@@ -200,6 +211,9 @@ public class ProductSearchService {
             hit.setSourceUrl(rs.getString("catalogue_source_url"));
             hit.setImageSourceUrl(rs.getString("image_source_url"));
             hit.setStoreCount(rs.getInt("store_count"));
+            hit.setCatalogueAmount(rs.getBigDecimal("catalogue_amount"));
+            hit.setCatalogueRetailer(rs.getString("catalogue_retailer"));
+            hit.setCatalogueObservedAt(rs.getObject("catalogue_observed_at",OffsetDateTime.class));
             hit.setMinEffectivePrice(rs.getBigDecimal("min_price"));
             var observed = rs.getObject("latest_observed_at", OffsetDateTime.class);
             hit.setLatestObservedAt(observed == null ? null : observed.toInstant());

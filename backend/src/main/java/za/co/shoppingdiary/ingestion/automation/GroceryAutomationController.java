@@ -17,7 +17,9 @@ public class GroceryAutomationController {
 
     @GetMapping
     public Map<String,Object> status() {
-        return Map.of("sources",service.sources(),"runs",service.history(),"review",service.reviews(),"quota",service.quota());
+        return Map.of("sources",service.sources(),"runs",service.history(),"review",service.reviews(),"quota",service.quota(),
+                "discovery",service.discovery(),"coverage",service.coverage(),"paused",service.paused(),
+                "coverageGroups",service.coverageGroups(),"incomplete",service.incompleteProducts());
     }
 
     @PostMapping("/{source}/sync")
@@ -36,6 +38,25 @@ public class GroceryAutomationController {
             return service.file(source,input,file.getOriginalFilename(),dryRun);
         }
     }
+
+    @PostMapping("/loyaltyhub/lookup")
+    public GroceryAutomation.Run lookup(@RequestParam(required=false) String query,
+            @RequestParam(required=false) String department,@RequestParam(required=false) String retailer,
+            @RequestParam(required=false) String region,@RequestParam(required=false) String barcode,
+            @RequestParam(defaultValue="true") boolean dryRun) {
+        return service.filteredLoyalty(query,new LoyaltyHubSource.Filters(department,retailer,region,barcode),dryRun);
+    }
+
+    @PostMapping("/loyaltyhub/discovery")
+    public GroceryAutomation.Run discovery() { return service.discoverNext(); }
+
+    @PutMapping("/loyaltyhub/discovery")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void configure(@RequestBody List<GroceryAutomation.DiscoveryConfig> entries) { service.configure(entries); }
+
+    @PutMapping("/loyaltyhub/pause")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void pause(@RequestParam boolean paused) { service.pause(paused); }
 
     @PostMapping("/loyaltyhub/purge")
     @ResponseStatus(HttpStatus.NO_CONTENT)

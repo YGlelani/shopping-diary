@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { X, TrendingDown, Store, MapPin, Bell, Plus } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { X, Store, MapPin, Bell, Plus } from 'lucide-react';
 import PriceContribution from './PriceContribution';
 import { Link } from 'react-router-dom';
 import { apiRequest } from '../api/client';
@@ -11,7 +10,7 @@ import { formatObservationDate, formatProductPrice } from '../utils/productForma
 
 export default function ProductDetailsModal({ product, onClose, lat, lon, radiusKm = 15, token, adding, onAddItem, alternatives = [], onSelectProduct }) {
   const dialog = useRef(null);
-  const [history, setHistory] = useState(null);
+  const [catalogueDetails, setCatalogueDetails] = useState(null);
   const [scoped, setScoped] = useState(null);
   const scopedPrices = scoped?.productId === product.productId ? scoped.rows : [];
   const [priceResult, setPriceResult] = useState(null);
@@ -22,7 +21,6 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, radius
   const priceKey = JSON.stringify([product.productId, lat, lon, radiusKm, applied, page]);
   const currentPrices = priceResult?.key === priceKey ? priceResult.rows : null;
   const pricesError = priceResult?.key === priceKey && priceResult.error;
-  const [historyError, setHistoryError] = useState(false);
   const [targetPrice, setTargetPrice] = useState('');
   const [alertStatus, setAlertStatus] = useState('idle');
   const hasLocation = Number.isFinite(lat) && Number.isFinite(lon);
@@ -37,19 +35,6 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, radius
     const controller = new AbortController();
     const options = { signal: controller.signal };
 
-    apiRequest('/products/' + product.productId + '/history', options)
-      .then(rows => {
-        const byDate = new Map();
-        for (const { observedAt, storeName, price } of rows) {
-          if (Number(price) <= 0 || price == null) continue;
-          const date = formatObservationDate(observedAt);
-          if (!byDate.has(date)) byDate.set(date, { date, prices: new Map() });
-          byDate.get(date).prices.set(storeName, Number(price));
-        }
-        if (!controller.signal.aborted) setHistory([...byDate.values()]);
-      })
-      .catch(() => { if (!controller.signal.aborted) setHistoryError(true); });
-
     apiRequest('/retailers', options)
       .then(rows => { if (!controller.signal.aborted) setRetailers(rows); })
       .catch(() => {});
@@ -57,9 +42,11 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, radius
   }, [product.productId]);
 
   useEffect(() => {
-    if (!token) return;
     const controller = new AbortController();
-    apiRequest('/scoped-prices/' + product.productId, { signal: controller.signal }, token)
+    apiRequest('/products/catalogue-details/' + product.productId, { signal: controller.signal })
+      .then(details => { if (!controller.signal.aborted) setCatalogueDetails({ productId: product.productId, ...details }); })
+      .catch(() => {});
+    apiRequest('/products/catalogue-prices/' + product.productId, { signal: controller.signal }, token)
       .then(rows => { if (!controller.signal.aborted) setScoped({ productId: product.productId, rows }); })
       .catch(() => {});
     return () => controller.abort();
@@ -102,7 +89,6 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, radius
     }
   };
 
-  const stores = [...new Set(history?.flatMap(row => [...row.prices.keys()]))];
   return (
     <dialog ref={dialog} onCancel={onClose} aria-labelledby="product-detail-title"
       className="m-auto h-full max-h-full w-full max-w-3xl bg-transparent backdrop:bg-gray-900/50 sm:h-auto sm:max-h-[90vh]">
@@ -264,15 +250,23 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, radius
             <Button variant="secondary" disabled={currentPrices.length < 26} onClick={() => setPage(value => value + 1)}>Next</Button>
           </nav>
         )}
+        {catalogueDetails?.productId === product.productId && <div className="space-y-1 text-sm text-gray-600">
+          {catalogueDetails.description && <p>{catalogueDetails.description}</p>}
+          {[catalogueDetails.manufacturer, catalogueDetails.variant, catalogueDetails.flavour].some(Boolean)
+            && <p>{[catalogueDetails.manufacturer, catalogueDetails.variant, catalogueDetails.flavour].filter(Boolean).join(' · ')}</p>}
+        </div>}
         {scopedPrices.length > 0 && <section className="mb-6 space-y-3 rounded-xl border border-gray-200 p-4">
-          <h3 className="font-semibold">Other price observations</h3>
-          <p className="text-sm text-gray-600">Catalogue prices can differ in store. Historical observations are excluded from current basket estimates.</p>
+          <h3 className="font-semibold">Latest catalogue prices</h3>
+          <p className="text-sm text-gray-600">Indicative catalogue prices can differ in store.</p>
           <ul className="divide-y divide-gray-200 text-sm">
             {scopedPrices.map((offer, index) => <li key={index} className="space-y-1 py-2">
-              <p><strong>{offer.retailer || offer.branchName || 'Observed price'}</strong>{' \u00b7 '}{formatProductPrice(offer.amount)}</p>
+              <p><strong>{offer.retailer || offer.branchName || 'Retailer'}</strong>{' \u00b7 '}{formatProductPrice(offer.amount)}</p>
               <p className="text-gray-600">{offer.scope === 'ONLINE' ? 'Online' : offer.scope === 'REGIONAL' ? 'Regional catalogue' : offer.scope === 'CATALOGUE' ? 'Store catalogue' : 'Reported branch observation'}
                 {offer.scopeLabel && offer.scopeLabel !== offer.branchName && ' \u00b7 ' + offer.scopeLabel}{offer.historical && ' \u00b7 Historical'}</p>
-              <p>Observed {formatObservationDate(offer.observedAt || offer.observedOn)}{' \u00b7 '}{offer.inStock == null ? 'Stock unknown' : offer.inStock ? 'Reported in stock' : 'Reported out of stock'}</p>
+              {offer.unitPriceAmount != null && offer.unitPriceMeasurement && <p>{formatProductPrice(offer.unitPriceAmount)} per {offer.unitPriceMeasurement}</p>}
+              {offer.membershipAmount != null && <p>Member price {formatProductPrice(offer.membershipAmount)}</p>}
+              {offer.promotionTerms && <p>{offer.promotionTerms}{offer.loyaltyRequired && ' · Membership required'}</p>}
+              <p>Updated {formatObservationDate(offer.observedAt || offer.observedOn)}{' \u00b7 '}{offer.inStock == null ? 'Stock unknown' : offer.inStock ? 'Reported in stock' : 'Reported out of stock'}</p>
               {offer.source === 'LOYALTYHUB' ? <a className="underline" href="https://loyaltyhub.co.za/" target="_blank" rel="noreferrer">Prices via Loyalty Hub</a> :
                 <a className="underline" href={offer.sourceUrl || 'https://prices.openfoodfacts.org/'} target="_blank" rel="noreferrer">Open Prices observation</a>}
             </li>)}
@@ -294,43 +288,6 @@ export default function ProductDetailsModal({ product, onClose, lat, lon, radius
           </section>
         )}
 
-        {/* Price History Chart */}
-          <div>
-            <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-              <TrendingDown size={16} /> Price History
-            </h3>
-            {historyError ? (
-              <p role="alert" className="text-sm text-red-700">Price history could not load.</p>
-            ) : history === null ? (
-              <div role="status" className="h-48 flex items-center justify-center text-gray-400">Loading chart...</div>
-            ) : history.length === 0 ? (
-              <div className="h-48 flex items-center justify-center text-gray-400">No comparable store-price history in the past 180 days.</div>
-            ) : (
-              <div className="h-56 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={history} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                    <XAxis dataKey="date" tick={{ fontSize: 12, fill: '#6B7280' }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 12, fill: '#6B7280' }} domain={['auto', 'auto']} tickFormatter={(val) => `R${val}`} axisLine={false} tickLine={false} />
-                    <Tooltip formatter={(value) => `R${value}`} />
-                    <Legend wrapperStyle={{ fontSize: '12px' }} />
-                    {stores.map((store, i) => (
-                      <Line
-                        key={store}
-                        type="monotone"
-                        dataKey={row => row.prices.get(store)}
-                        name={store}
-                        stroke={['#047857', '#2563EB', '#DC2626', '#D97706'][i % 4]}
-                        strokeWidth={2}
-                        dot={{ r: 3 }}
-                        activeDot={{ r: 5 }}
-                      />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </div>
         </div>
 
         {/* Footer */}

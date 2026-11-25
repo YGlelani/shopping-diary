@@ -1,6 +1,7 @@
+import { ProductImage } from '../components/ProductPresentation';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { CalendarDays, MapPin, Package, Search, Tag } from 'lucide-react';
+import { CalendarDays, MapPin, Search, Tag } from 'lucide-react';
 import { apiRequest } from '../api/client';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -68,10 +69,7 @@ function DealCard({ deal, onOpen }) {
       <strong className="break-words">{deal.retailer}</strong>
       <span className="ml-auto shrink-0 rounded bg-gray-100 px-2 py-1 text-xs">{deal.validity === 'ACTIVE' ? deal.verification.toLowerCase() : deal.validity.toLowerCase()}</span>
     </div>
-    <div className="grid h-32 place-items-center rounded-lg bg-gray-50">
-      {deal.imageUrl ? <img src={deal.imageUrl} alt="" loading="lazy" className="h-full w-full object-contain p-2" /> :
-        <Package size={32} className="text-gray-400" aria-hidden="true" />}
-    </div>
+    <ProductImage product={{ imageUrl: deal.imageUrl, canonicalName: deal.productName }} />
     <div className="min-w-0 break-words">
       <p className="text-xs text-gray-600">{[deal.brand, deal.sizeText, deal.category].filter(Boolean).join(' · ')}</p>
       <h2 className="text-base font-semibold">{deal.productName}</h2>

@@ -276,7 +276,7 @@ class CatalogueDiscoveryIntegrationTest {
         admin.setRole(Role.ADMIN);
         String token = "Bearer " + jwt.issue(admin);
         mvc.perform(get("/api/v1/admin/directory").header("Authorization", token))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(20));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(22));
         long retailer = jdbc.queryForObject("SELECT id FROM retailers WHERE slug = 'boxer'", Long.class);
         mvc.perform(put("/api/v1/admin/directory/" + retailer + "/branches/TEST-BRANCH")
                 .header("Authorization", token).contentType("application/json")
@@ -939,9 +939,9 @@ class CatalogueDiscoveryIntegrationTest {
             intake.accept("OPEN_PRICES",java.util.List.of(historical),false);
         }
         org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM grocery_scoped_prices WHERE product_id=?",Integer.class,breadId)).isEqualTo(2);
+                "SELECT count(*) FROM grocery_scoped_prices WHERE product_id=?",Integer.class,breadId)).isEqualTo(1);
         org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM grocery_scoped_prices WHERE source='LOYALTYHUB' AND branch_id IS NULL AND in_stock IS NULL",
+                "SELECT count(*) FROM loyalty_latest_prices WHERE in_stock IS NULL",
                 Integer.class)).isGreaterThanOrEqualTo(1);
         prices().andExpect(jsonPath("$.length()").value(0));
         mvc.perform(get("/api/v1/scoped-prices/"+breadId).header("Authorization",token))
@@ -957,7 +957,7 @@ class CatalogueDiscoveryIntegrationTest {
         int observations = jdbc.queryForObject("SELECT count(*) FROM grocery_scoped_prices",Integer.class);
         try {
             freeQuota.record(0,0,null,java.time.Instant.now().plusSeconds(3600));
-            org.assertj.core.api.Assertions.assertThatThrownBy(freeQuota::reserve)
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> freeQuota.reserve(false,10))
                     .isInstanceOfSatisfying(org.springframework.web.server.ResponseStatusException.class,
                             failure -> org.assertj.core.api.Assertions.assertThat(failure.getStatusCode().value()).isEqualTo(429));
             org.assertj.core.api.Assertions.assertThat(freeQuota.usage().localCalls()).isEqualTo(quotaState.localCalls());
@@ -1036,5 +1036,81 @@ class CatalogueDiscoveryIntegrationTest {
                 shelf_price, promo_price, stock_status, verification_status, content_hash)
             VALUES (?, ?, 'MANUAL', %s, ?, ?, ?, ?, ?)
             """.formatted(timestampExpression), breadId, storeId, shelf, promo, stock, verification, hash);
+    }
+
+    @Test
+    void replacesLatestCataloguePriceAndKeepsRegionalOffersSeparate() throws Exception {
+        var now=java.time.Instant.now();
+        var metadata=json.readTree("""
+            {"image_url":"https://retailer.example/bread.jpg","size":{"quantity":0.7,"unit":"kg"},
+             "unit_price":{"value":24.27,"per":"kg"},"department":"bakery","category":"Bread"}
+            """);
+        var initial=catalogueFixture("ONLINE","online","22.90",now.minusSeconds(600),metadata);
+        var latest=catalogueFixture("ONLINE","online","16.99",now.minusSeconds(200),metadata);
+        var regional=catalogueFixture("REGIONAL","gauteng","18.99",now.minusSeconds(200),metadata);
+        intake.accept("LOYALTYHUB",java.util.List.of(initial,latest,regional,initial,latest),false);
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForList("""
+                SELECT amount FROM loyalty_latest_prices WHERE product_id=? ORDER BY scope
+                """,java.math.BigDecimal.class,breadId)).containsExactly(
+                        new java.math.BigDecimal("16.99"),new java.math.BigDecimal("18.99"));
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("""
+                SELECT attributes->'unit_price'->>'per' FROM loyalty_product_metadata WHERE product_id=?
+                """,String.class,breadId)).isEqualTo("kg");
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                "SELECT image_url FROM products WHERE id=?",String.class,breadId)).isNull();
+        prices().andExpect(jsonPath("$.length()").value(0));
+    }
+
+    private za.co.shoppingdiary.ingestion.automation.PriceDataSource.Price catalogueFixture(
+            String scope,String region,String value,java.time.Instant at,com.fasterxml.jackson.databind.JsonNode attributes) {
+        var amount=new java.math.BigDecimal(value);
+        return new za.co.shoppingdiary.ingestion.automation.PriceDataSource.Price(null,"0012345678901","fixture-latest",
+                "Whole Wheat Bread","Sasko","700 g","checkers",scope,region,null,null,amount,amount,null,null,
+                "ZAR",at,null,null,null,null,true,attributes);
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "LOYALTYHUB_LIVE_TEST", matches = "true")
+    void importsRealMaizeMealIntoIsolatedDatabase() {
+        var key=System.getenv("LOYALTYHUB_API_KEY");
+        org.assertj.core.api.Assertions.assertThat(key!=null && !key.isBlank()).isTrue();
+        var source=context.getBean(za.co.shoppingdiary.ingestion.automation.LoyaltyHubSource.class);
+        var originalKey=org.springframework.test.util.ReflectionTestUtils.getField(source,"key");
+        var originalEnabled=org.springframework.test.util.ReflectionTestUtils.getField(source,"optedIn");
+        var originalSize=org.springframework.test.util.ReflectionTestUtils.getField(source,"pageSize");
+        try {
+            org.springframework.test.util.ReflectionTestUtils.setField(source,"key",key);
+            org.springframework.test.util.ReflectionTestUtils.setField(source,"optedIn",true);
+            org.springframework.test.util.ReflectionTestUtils.setField(source,"pageSize",1);
+            var page=source.collect("maize meal",0,null,true);
+            org.assertj.core.api.Assertions.assertThat(page.rows()).hasSize(1);
+            intake.accept("LOYALTYHUB",page.rows(),false);
+            int products=jdbc.queryForObject("SELECT count(*) FROM loyalty_product_metadata",Integer.class);
+            int prices=jdbc.queryForObject("SELECT count(*) FROM loyalty_latest_prices",Integer.class);
+            int images=jdbc.queryForObject("SELECT count(*) FROM loyalty_product_metadata WHERE attributes->>'image_url' IS NOT NULL",Integer.class);
+            var usage=freeQuota.usage();
+            System.out.printf("Loyalty Hub isolated live test: %d products, %d latest offers, %d supplied image URLs, %s provider requests remaining, %s provider rows remaining.%n",
+                    products,prices,images,usage.remaining(),usage.rowsRemaining());
+            org.assertj.core.api.Assertions.assertThat(products).isEqualTo(1);
+            org.assertj.core.api.Assertions.assertThat(prices).isEqualTo(1);
+        } finally {
+            org.springframework.test.util.ReflectionTestUtils.setField(source,"key",originalKey);
+            org.springframework.test.util.ReflectionTestUtils.setField(source,"optedIn",originalEnabled);
+            org.springframework.test.util.ReflectionTestUtils.setField(source,"pageSize",originalSize);
+        }
+    }
+
+    @Test
+    void discoveryPersistsBackoffAndSupportsPause() {
+        var automation=context.getBean(za.co.shoppingdiary.ingestion.automation.GroceryAutomation.class);
+        org.assertj.core.api.Assertions.assertThat(automation.discovery()).hasSize(72);
+        var run=automation.discoverNext();
+        org.assertj.core.api.Assertions.assertThat(run.status()).isEqualTo("FAILED");
+        var failed=automation.discovery().stream().filter(item -> item.failures()>0).findFirst().orElseThrow();
+        org.assertj.core.api.Assertions.assertThat(failed.nextRun()).isAfter(java.time.OffsetDateTime.now());
+        automation.pause(true);
+        org.assertj.core.api.Assertions.assertThatThrownBy(automation::discoverNext)
+                .isInstanceOfSatisfying(org.springframework.web.server.ResponseStatusException.class,
+                        error -> org.assertj.core.api.Assertions.assertThat(error.getStatusCode().value()).isEqualTo(409));
     }
 }

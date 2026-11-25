@@ -4,7 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { Card, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
-import { ProductCredits, ProductImage } from '../components/ProductPresentation';
+import { CataloguePrice, ProductCredits, ProductImage } from '../components/ProductPresentation';
 import { formatObservationDate, formatProductPrice } from '../utils/productFormatting';
 import { apiRequest } from '../api/client';
 
@@ -195,6 +195,7 @@ function DiscoverContent({ token, onAddItem, location, radius, onRadiusChange, i
               ) : (
                 <p className="text-sm font-medium text-gray-600">{hasLocation ? 'No nearby prices reported' : 'Price unavailable'}</p>
               )}
+              <CataloguePrice product={product} />
               <ProductCredits product={product} />
               <div className="mt-auto flex gap-2">
                 <Button variant="secondary" className="flex-1" onClick={() => setSelectedProduct(product)}

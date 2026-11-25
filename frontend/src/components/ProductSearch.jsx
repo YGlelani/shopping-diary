@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Search, Plus } from 'lucide-react'; // <-- Import icons
+import { CataloguePrice, ProductImage } from './ProductPresentation';
 import { apiRequest } from '../api/client';
 import { formatProductPrice } from '../utils/productFormatting';
 
@@ -37,11 +38,12 @@ export default function ProductSearch({ onAddProduct, lat, lon, onViewDetails })
       <div className="space-y-2">
         {results.map(p => (
           <div key={p.productId} className="bg-white p-4 rounded-lg shadow-sm flex justify-between items-center">
-            {/* CLICKABLE AREA */}
+            <ProductImage product={p} compact />
             <div className="cursor-pointer hover:opacity-70 transition" onClick={() => onViewDetails(p)}>
               <h3 className="font-medium text-sm text-blue-600 hover:underline">{p.canonicalName}</h3>
               <p className="text-xs text-gray-500">{p.brand} • {p.sizeText}</p>
               <p className="text-sm font-bold mt-1">{formatProductPrice(p.minEffectivePrice)}</p>
+              <CataloguePrice product={p} />
             </div>
             <button onClick={() => onAddProduct(p.productId)} className="bg-blue-50 text-blue-700 px-3 py-1 rounded text-sm font-medium hover:bg-blue-100 flex items-center gap-1">
               <Plus size={16} /> Add

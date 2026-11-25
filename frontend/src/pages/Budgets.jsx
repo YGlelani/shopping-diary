@@ -1,3 +1,4 @@
+import { CataloguePrice, ProductImage } from '../components/ProductPresentation';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../api/client';
@@ -124,12 +125,14 @@ function Estimate({ resource, lists, archived }) {
       </dl>
       <p className="text-sm text-gray-600">{archived ? 'Archived estimate from ' : 'Prices checked '}<time dateTime={quote.calculatedAt}>{new Date(quote.calculatedAt).toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg' })}</time>. Prices can change at checkout.</p>
       {quote.lines.length > 0 && <ul className="divide-y rounded-lg border px-3">
-        {quote.lines.map(row => <li key={row.itemId} className="grid gap-1 py-3 text-sm sm:grid-cols-[1fr_auto]">
+        {quote.lines.map(row => <li key={row.itemId} className="grid grid-cols-[auto_1fr] gap-3 py-3 text-sm sm:grid-cols-[auto_1fr_auto]">
+          <ProductImage compact product={{ imageUrl: row.imageUrl, canonicalName: row.productName || row.requestedName }} />
           <div className="min-w-0 break-words">
             <p className="font-medium">{row.requestedName} × {row.quantity}</p>
             <p className="text-gray-600">{lists.find(list => list.id === row.listId)?.name}{row.storeName && ' · ' + row.storeName}</p>
             {row.productName && row.productName !== row.requestedName && <p>Approved alternative {row.productName}</p>}
             {row.observedAt && <p className="text-gray-600">Observed {new Date(row.observedAt).toLocaleDateString('en-ZA', { timeZone: 'Africa/Johannesburg' })}{row.sourceType && ' · ' + row.sourceType.replaceAll('_', ' ').toLowerCase()}{row.verificationStatus && ' · ' + row.verificationStatus.replaceAll('_', ' ').toLowerCase()}</p>}
+            {row.catalogueTotal != null && <CataloguePrice product={{ catalogueAmount: row.catalogueTotal, catalogueRetailer: row.catalogueRetailer }} />}
             {row.unavailableReason === 'STALE_OBSERVATION' && <p className="text-amber-800">A nearby observation is outdated.</p>}
             {row.unavailableReason === 'UNLINKED' && <p className="text-gray-600">Link this entry to a catalogue product to check prices.</p>}
             {row.promotionEndsOn && <p className="text-amber-800">Offer ends {row.promotionEndsOn}. Refresh before shopping.</p>}

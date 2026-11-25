@@ -18,6 +18,21 @@ jobs:
       contents: read
       packages: write
 
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: discovery_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: discovery_test
+        ports:
+          - 55436:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d discovery_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -32,9 +47,11 @@ jobs:
       - name: Grant execute permission for Maven Wrapper
         run: chmod +x backend/mvnw
 
-      - name: Maven build (skip tests)
+      - name: Verify backend with PostGIS
+        env:
+          DISCOVERY_POSTGIS_TEST: "true"
         working-directory: backend
-        run: ./mvnw -B -ntp package -DskipTests
+        run: ./mvnw -B -ntp verify
 
       - name: Set lowercase image name
         run: echo "IMAGE_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')/backend" >> "$GITHUB_ENV"

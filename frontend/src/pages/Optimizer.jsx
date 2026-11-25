@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Calculator, MapPin, Store } from 'lucide-react';
+import { ProductImage } from '../components/ProductPresentation';
 import ShoppingLocationSelector from '../components/ShoppingLocationSelector';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -68,7 +69,7 @@ function PlanDetails({ plan, onReject }) {
         <strong>{money(store.storeSubtotal)}</strong>
       </div>
       <ul className="mt-3 divide-y">{plan.items.filter(item => item.assignedStoreId === store.storeId).map(item => <li key={item.itemId} className="flex items-start gap-3 py-3 text-sm">
-        {item.imageUrl && <img alt="" className="h-10 w-10 shrink-0 rounded object-contain" loading="lazy" src={item.imageUrl} />}
+        <ProductImage compact product={{ ...item, canonicalName: item.productName }} />
         <div className="min-w-0 flex-1 break-words">
           <p className="font-medium">{item.quantity} × {item.productName}{item.sizeText && ' · ' + item.sizeText}</p>
           <p className="text-gray-600">{item.verificationStatus === 'VERIFIED' ? 'Verified observation' : 'Unverified observation'} · {stamp(item.observedAt)}</p>

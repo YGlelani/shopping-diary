@@ -1,3 +1,4 @@
+import { ProductImage } from '../components/ProductPresentation';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../api/client';
@@ -306,7 +307,7 @@ function ListDetail({ list, token, activeLocation, radius, busy, run, onRemember
       <ul className="divide-y rounded-lg border">
         {entries.map(item => <li key={item.id} className="space-y-2 p-3">
           <div className="flex flex-wrap items-start gap-3">
-            {item.imageUrl && <img src={item.imageUrl} alt="" loading="lazy" className="h-14 w-14 shrink-0 object-contain" />}
+            {item.productId && <ProductImage compact product={{ ...item, canonicalName: item.productName }} />}
             <div className="min-w-[10rem] flex-1 space-y-1">
               <label className="flex items-start gap-2">
                 <input type="checkbox" checked={item.purchased} disabled={busy || !editable} className="mt-1"

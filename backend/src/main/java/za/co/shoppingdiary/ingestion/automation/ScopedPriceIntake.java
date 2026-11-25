@@ -24,8 +24,10 @@ import static za.co.shoppingdiary.ingestion.automation.SourceFields.*;
 public class ScopedPriceIntake {
     private final JdbcClient jdbc;
     private final BulkGroceryFiles files;
+    private final LoyaltyCatalogue loyalty;
 
     public ImportCounts accept(String source,List<PriceDataSource.Price> rows,boolean dry) {
+        if ("LOYALTYHUB".equals(source)) return loyalty.accept(rows,dry,null);
         var report=new ImportCounts();
         for (var row : rows) {
             report.examined++;
@@ -41,7 +43,7 @@ public class ScopedPriceIntake {
             var retailer=slug==null ? null : jdbc.sql("SELECT id FROM retailers WHERE active AND slug=:slug")
                     .param("slug",slug).query(Long.class).optional().orElse(null);
             var product=code!=null ? jdbc.sql("SELECT id FROM products WHERE barcode=:barcode")
-                    .param("barcode",code).query(Long.class).optional().orElse(null) : approvedAlias(retailer,row);
+                    .param("barcode",code).query(Long.class).optional().orElse(null) : approvedAlias(jdbc,retailer,row);
             if (row.observedAt()==null && row.observedOn()==null) {
                 files.review(source,key(row),"Missing provider observation date",row.name(),dry,report);
                 continue;
@@ -51,7 +53,7 @@ public class ScopedPriceIntake {
             var branch="BRANCH".equals(scope) && row.osmType()!=null && row.osmId()!=null
                     ? jdbc.sql("SELECT id FROM stores WHERE osm_type=:type AND osm_id=:osm")
                     .param("type",row.osmType()).param("osm",row.osmId()).query(Long.class).optional().orElse(null) : null;
-            boolean review=product==null || ("LOYALTYHUB".equals(source) && retailer==null)
+            boolean review=product==null
                     || "UNKNOWN".equals(scope) || ("BRANCH".equals(scope) && branch==null);
             String key=key(row);
             if (review) files.review(source,key,product==null ? "Product requires an exact match" : "Scope or retailer requires review",row.name(),dry,report);
@@ -97,7 +99,7 @@ public class ScopedPriceIntake {
         return report;
     }
 
-    private Long approvedAlias(Long retailer,PriceDataSource.Price row) {
+    static Long approvedAlias(JdbcClient jdbc, Long retailer,PriceDataSource.Price row) {
         if (retailer==null || row.name()==null || row.brand()==null || row.size()==null) return null;
         return jdbc.sql("""
             SELECT DISTINCT p.id FROM product_aliases a JOIN products p ON p.id=a.product_id
