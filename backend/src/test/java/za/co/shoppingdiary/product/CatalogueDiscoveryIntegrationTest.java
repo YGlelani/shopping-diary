@@ -1103,7 +1103,9 @@ class CatalogueDiscoveryIntegrationTest {
     @Test
     void discoveryPersistsBackoffAndSupportsPause() {
         var automation=context.getBean(za.co.shoppingdiary.ingestion.automation.GroceryAutomation.class);
-        org.assertj.core.api.Assertions.assertThat(automation.discovery()).hasSize(72);
+        org.assertj.core.api.Assertions.assertThat(automation.discovery()).hasSize(275);
+        org.assertj.core.api.Assertions.assertThat(automation.discovery())
+                .anyMatch(type -> type.name().equals("Brown rice") && type.priority()==2 && type.keywords().equals("brown rice"));
         var run=automation.discoverNext();
         org.assertj.core.api.Assertions.assertThat(run.status()).isEqualTo("FAILED");
         var failed=automation.discovery().stream().filter(item -> item.failures()>0).findFirst().orElseThrow();
